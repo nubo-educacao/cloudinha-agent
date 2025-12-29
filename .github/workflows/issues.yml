@@ -1,0 +1,29 @@
+name: Issues Automation
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  apply-template:
+    uses: nubo-educacao/.github/.github/workflows/_apply-issue-template.yml@main
+    secrets: inherit
+
+  set-type:
+    needs: apply-template
+    uses: nubo-educacao/.github/.github/workflows/_set-issue-type.yml@main
+    with:
+      match_prefixes: "BUG:Bug,STORY:Story,TASK:Task"
+    secrets: inherit
+
+  add-to-project:
+    needs: set-type
+    uses: nubo-educacao/.github/.github/workflows/add-to-project.yml@main
+    # project_url vem do default no workflow central
+    secrets:
+      GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+
+      ### THIS WORKS

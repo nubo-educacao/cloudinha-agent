@@ -1,0 +1,21 @@
+# .github/workflows/org-sync.yml
+name: Sync org labels & milestones (nubo-educacao)
+
+on:
+  workflow_dispatch:
+  # opcional: rode semanalmente
+  # schedule:
+  #   - cron: "0 12 * * 1"  # segundas 12:00 UTC
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  labels:
+    name: Labels
+    uses: nubo-educacao/.github/.github/workflows/reuse-sync-labels.yml@main
+
+  milestones:
+    name: Milestones
+    uses: nubo-educacao/.github/.github/workflows/reuse-sync-milestones.yml@main
