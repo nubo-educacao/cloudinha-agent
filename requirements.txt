@@ -3,3 +3,12 @@ langchain-openai
 supabase
 python-dotenv
 google-adk
+geopy
+langchain-google-genai
+langchain-community
+langchain-text-splitters
+pypdf
+pytz
+python-socketio
+fastapi
+uvicorn

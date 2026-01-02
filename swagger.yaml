@@ -1,0 +1,280 @@
+openapi: 3.0.0
+info:
+  title: Cloudinha Agent Supabase API
+  version: 1.0.0
+  description: >
+    Documentation of the Supabase tables, views, and RPCs specifically used by the Cloudinha Agent.
+    This is a subset of the full database API, focused on the resources accessed by the Python agent tools.
+servers:
+  - url: https://yfgciamhzjvarwgzosto.supabase.co/rest/v1
+    description: Supabase REST API Endpoint
+
+components:
+  securitySchemes:
+    apikey:
+      type: apiKey
+      name: apikey
+      in: header
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        city:
+          type: string
+        age:
+          type: integer
+        academic_goal:
+          type: string
+    UserPreference:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: string
+          format: uuid
+        enem_score:
+          type: number
+          format: float
+        family_income_per_capita:
+          type: number
+          format: float
+        quota_types:
+          type: array
+          items:
+            type: string
+    Opportunity:
+      type: object
+      description: Read-only view of opportunities
+      properties:
+        course_id:
+          type: string
+          format: uuid
+        institution:
+          type: string
+        course:
+          type: string
+        type:
+          type: string
+        scholarship_type:
+          type: string
+        cutoff_score:
+          type: number
+          format: float
+        city:
+          type: string
+    ModerationLog:
+      type: object
+      required: [message_content, agent_reasoning, flagged_category]
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        message_content:
+          type: string
+        agent_reasoning:
+          type: string
+        flagged_category:
+          type: string
+        user_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+security:
+  - apikey: []
+  - bearerAuth: []
+
+paths:
+  /user_profiles:
+    get:
+      summary: Get User Profile
+      description: Used by `getStudentProfileTool`
+      parameters:
+        - name: id
+          in: query
+          description: Filter by User ID (eq)
+          schema:
+            type: string
+            format: uuid
+        - name: select
+          in: query
+          description: Columns to select
+          schema:
+            type: string
+            default: full_name,city,age,academic_goal
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserProfile'
+    post:
+      summary: Upsert User Profile
+      description: Used by `updateStudentProfileTool`. Uses Prefer header for upsert.
+      parameters:
+        - name: on_conflict
+          in: query
+          description: Column to check for conflicts (e.g. id)
+          schema:
+            type: string
+            default: id
+        - name: Prefer
+          in: header
+          schema:
+            type: string
+            enum: ['resolution=merge-duplicates']
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserProfile'
+      responses:
+        '201':
+          description: Created/Updated
+
+  /user_preferences:
+    get:
+      summary: Get User Preferences
+      description: Used by `getStudentProfileTool`
+      parameters:
+        - name: user_id
+          in: query
+          description: Filter by User ID (eq)
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserPreference'
+    patch:
+      summary: Update User Preferences
+      description: Used by `updateStudentProfileTool`
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: Primary Key ID (eq)
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPreference'
+      responses:
+        '204':
+          description: Updated
+    post:
+      summary: Insert User Preferences
+      description: Used by `updateStudentProfileTool` when no preference exists
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPreference'
+      responses:
+        '201':
+          description: Created
+
+  /opportunities_view:
+    get:
+      summary: Search Opportunities
+      description: Used by `searchOpportunitiesTool`. Supports filtering by course name and cutoff score.
+      parameters:
+        - name: course
+          in: query
+          description: Filter by course name (ilike)
+          schema:
+            type: string
+        - name: cutoff_score
+          in: query
+          description: Filter by cutoff score (lte)
+          schema:
+            type: number
+            format: float
+        - name: city
+          in: query
+          description: Optional filter by city (ilike)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of opportunities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Opportunity'
+
+  /moderation_logs:
+    post:
+      summary: Log Moderation Event
+      description: Used by `logModerationTool`
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModerationLog'
+      responses:
+        '201':
+          description: Log created
+
+  /rpc/match_documents:
+    post:
+      summary: Semantic Search (RAG)
+      description: Used by `knowledgeSearchTool` (via LangChain SupabaseVectorStore)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query_embedding:
+                  type: array
+                  items:
+                    type: number
+                  description: Vector embedding (768 dimensions)
+                match_threshold:
+                  type: number
+                  format: float
+                match_count:
+                  type: integer
+      responses:
+        '200':
+          description: Matching document chunks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    content:
+                      type: string
+                    similarity:
+                      type: number
+                      format: float

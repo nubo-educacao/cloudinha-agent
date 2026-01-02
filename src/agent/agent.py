@@ -3,7 +3,9 @@ from google.adk.agents import LlmAgent
 from src.tools.searchOpportunities import searchOpportunitiesTool
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.updateStudentProfile import updateStudentProfileTool
-from util import load_instruction_from_file
+from src.tools.logModeration import logModerationTool
+from src.tools.knowledgeSearch import knowledgeSearchTool
+from .utils import load_instruction_from_file
 
 load_dotenv()
 
@@ -31,19 +33,36 @@ match_agent = LlmAgent(
     output_key="match_report",
 )
 
+# --- Sub Agent 3: Prouni Agent (RAG) ---
+prouni_agent = LlmAgent(
+    model=MODEL,
+    name="prouni_agent",
+    description="Especialista no Programa Universidade para Todos (Prouni). Responde dúvidas sobre bolsas, regras e documentação.",
+    instruction=load_instruction_from_file("prouni_agent_instruction.txt"),
+    tools=[knowledgeSearchTool],
+    output_key="prouni_report",
+)
+
+# --- Sub Agent 4: Sisu Agent (RAG) ---
+sisu_agent = LlmAgent(
+    model=MODEL,
+    name="sisu_agent",
+    description="Especialista no Sistema de Seleção Unificada (Sisu). Responde dúvidas sobre inscrição, nota de corte e cotas.",
+    instruction=load_instruction_from_file("sisu_agent_instruction.txt"),
+    tools=[knowledgeSearchTool],
+    output_key="sisu_report",
+)
+
 root_agent = LlmAgent(
     model=MODEL,
     name="cloudinha_agent",
     description="Você é a Cloudinha, uma assistente especializada em Prouni e Sisu.",
     instruction=load_instruction_from_file("root_agent_instruction.txt"),
-    sub_agents=[onboarding_agent, match_agent]
+    sub_agents=[onboarding_agent, match_agent, prouni_agent, sisu_agent],
+    tools=[logModerationTool]
 )
 
 # --- Root Agent for the Runner ---
 # The runner will now execute the workflow
 agent = root_agent
 
-from google.genai import types
-from google.adk.sessions import InMemorySession
-from google.adk.runners import Runner
-from util import load_instruction_from_file
