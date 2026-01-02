@@ -1,208 +1,95 @@
-# 🤖 Nubo Hub - Agente Cloudinha (n8n)
+# ☁️ Cloudinha Agent (ADK Version)
 
-Repositório para configuração e workflows do agente conversacional **Cloudinha**, construído com n8n para o projeto Nubo Hub.
+Este repositório contém o código fonte do agente **Cloudinha**, reescrito utilizando o **Google ADK (Agent Development Kit)**. A nova arquitetura é modular, baseada em agentes LLM especializados orquestrados por um agente raiz, utilizando modelos Gemini da Google.
 
-## 📋 Sobre
+## 🏗️ Arquitetura
 
-A Cloudinha é um agente conversacional de IA que auxilia estudantes no processo de onboarding e descoberta de oportunidades educacionais através do Nubo Hub.
+O sistema adota uma arquitetura hierárquica de agentes:
 
-## 🌐 Ambiente Atual
+-   **Root Agent (`cloudinha_agent`)**: O orquestrador principal. Ele analisa a intenção do usuário e delega a tarefa para o sub-agente mais apropriado.
+-   **Sub-Agentes**:
+    -   **`onboarding_agent`**: Responsável pelo acolhimento inicial, entender o momento do estudante e coletar informações básicas.
+    -   **`match_agent`**: Especialista em buscar e recomendar oportunidades educacionais (Prouni, Sisu) alinhadas ao perfil do estudante.
+-   **Ferramentas (Tools)**: Funções Python que permitem aos agentes interagir com o banco de dados e APIs externas.
 
-**Estamos usando [n8n.io](https://n8n.io)** (versão cloud hospedada).
+## 📂 Estrutura do Projeto
 
-- ✅ Workflow já criado e funcionando
-- ✅ Zero configuração de infraestrutura
-- ✅ URL pública para webhooks
-- 📝 Ver instruções de configuração em [`N8N_CONFIG.md`](./N8N_CONFIG.md)
+```
+cloudinha-agent/
+├── src/
+│   ├── agent/
+│   │   ├── agent.py            # Definição dos agentes (Root e Sub-agents) e orquestração
+│   │   └── util/               # Utilitários e prompts (instruções do sistema)
+│   ├── tools/                  # Implementação das ferramentas do agente
+│   │   ├── getStudentProfile.py
+│   │   ├── updateStudentProfile.py
+│   │   └── searchOpportunities.py
+│   └── lib/                    # Bibliotecas auxiliares
+├── .env                        # Variáveis de ambiente (Segredos)
+├── requirements.txt            # Dependências do Python
+└── README.md                   # Documentação
+```
 
-## 🚀 Início Rápido
+## 🚀 Como Executar
 
 ### Pré-requisitos
 
-- Docker e Docker Compose instalados
-- Porta 5678 disponível (ou configure outra no `.env`)
+-   Python 3.10 ou superior
+-   Chave de API do Google AI Studio (Gemini)
+-   Acesso ao Supabase (se necessário para persistência)
 
-### 1. Configuração Inicial
+### Instalação
 
-1. Clone este repositório:
-```bash
-git clone <url-do-repo>
-cd nubo-hub-agent-n8n
-```
+1.  **Clone o repositório:**
+    ```bash
+    git clone <seu-repo-url>
+    cd cloudinha-agent
+    ```
 
-2. Copie o arquivo de exemplo de variáveis de ambiente:
-```bash
-cp .env.example .env
-```
+2.  **Crie e ative um ambiente virtual:**
+    ```bash
+    # Windows
+    python -m venv venv
+    .\venv\Scripts\activate
 
-3. **IMPORTANTE**: Edite o arquivo `.env` e altere as senhas padrão:
-```bash
-# No Windows
-notepad .env
+    # Linux/Mac
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
 
-# No Linux/Mac
-nano .env
-```
+3.  **Instale as dependências:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-Altere pelo menos estas variáveis:
-- `N8N_BASIC_AUTH_PASSWORD`
-- `POSTGRES_PASSWORD`
+4.  **Configure o ambiente:**
+    Crie um arquivo `.env` na raiz do projeto e defina suas chaves:
+    ```env
+    GOOGLE_API_KEY=sua_chave_aqui
+    SUPABASE_URL=sua_url_supabase
+    SUPABASE_KEY=sua_chave_supabase
+    ```
 
-### 2. Subir a Instância n8n
+### Executando o Agente
 
-Execute o comando:
+Com o ambiente ativado e configurado, você pode executar o agente utilizando a CLI do ADK.
 
-```bash
-docker-compose up -d
-```
-
-Aguarde alguns segundos para os containers iniciarem. Você pode acompanhar os logs com:
-
-```bash
-docker-compose logs -f
-```
-
-### 3. Acessar o n8n
-
-Abra seu navegador e acesse:
-
-```
-http://localhost:5678
-```
-
-Faça login com as credenciais definidas no `.env`:
-- **Usuário**: valor de `N8N_BASIC_AUTH_USER` (padrão: `admin`)
-- **Senha**: valor de `N8N_BASIC_AUTH_PASSWORD`
-
-## 📁 Estrutura do Projeto
-
-```
-nubo-hub-agent-n8n/
-├── docker-compose.yml          # Configuração Docker do n8n + PostgreSQL
-├── .env.example                # Exemplo de variáveis de ambiente
-├── .env                        # Suas variáveis (NÃO commitar!)
-├── workflows/                  # Workflows do n8n (auto-sincronizados)
-├── credentials/                # Credenciais (NÃO commitar!)
-└── README.md                   # Este arquivo
-```
-
-## 🔧 Comandos Úteis
-
-### Parar os serviços
-```bash
-docker-compose down
-```
-
-### Parar e remover volumes (CUIDADO: apaga dados!)
-```bash
-docker-compose down -v
-```
-
-### Ver logs
-```bash
-docker-compose logs -f n8n
-docker-compose logs -f postgres
-```
-
-### Reiniciar apenas o n8n
-```bash
-docker-compose restart n8n
-```
-
-## 🔌 Integrações
-
-### Supabase
-
-Para integrar com Supabase, adicione no `.env`:
-
-```env
-SUPABASE_URL=https://seu-projeto.supabase.co
-SUPABASE_ANON_KEY=sua-chave-anon
-SUPABASE_SERVICE_ROLE_KEY=sua-chave-service-role
-```
-
-Depois, configure as credenciais no n8n através da interface web.
-
-### OpenAI / Anthropic
-
-Para usar modelos de IA, adicione no `.env`:
-
-```env
-OPENAI_API_KEY=sk-...
-# ou
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Configure as credenciais correspondentes no n8n.
-
-## 📚 Próximos Passos
-
-1. ✅ Subir instância n8n (você está aqui!)
-2. ⏳ Criar workflow de onboarding da Cloudinha
-3. ⏳ Integrar com Supabase
-4. ⏳ Criar componente de webchat no Nubo Hub
-5. ⏳ Testar fluxo completo de onboarding
-
-## 🆘 Troubleshooting
-
-### Porta 5678 já está em uso
-
-Altere a porta no `.env`:
-```env
-N8N_PORT=5679
-```
-
-E reinicie os containers.
-
-### Erro de conexão com PostgreSQL
-
-Verifique se o container do PostgreSQL está saudável:
-```bash
-docker-compose ps
-```
-
-Se estiver "unhealthy", veja os logs:
-```bash
-docker-compose logs postgres
-```
-
-### Esqueci a senha do n8n
-
-1. Pare os containers: `docker-compose down`
-2. Edite o `.env` com uma nova senha
-3. Suba novamente: `docker-compose up -d`
-
-## 📝 Licença
-
-Projeto Nubo Hub - Velez Reyes Foundation
-
-## 👥 Contato
-
-
-## 🛠️ Servidor MCP (Ferramentas da Cloudinha)
-
-O diretório também contém um **Servidor MCP** que expõe ferramentas para o agente Clouinha (e outros clientes MCP) interagirem com o banco de dados do Nubo.
-
-### Ferramentas Disponíveis
-
-1.  `search_opportunities`: Busca cursos e vagas (Sisu/Prouni).
-2.  `get_student_profile`: Retorna perfil e preferências do aluno.
-3.  `update_student_profile`: Atualiza dados do aluno.
-
-### Como rodar o servidor MCP
-
-#### Localmente (Dev)
+Para iniciar a interface web de debug do agente:
 
 ```bash
-npm install
-npm dev
+adk web
 ```
 
-#### Docker
+Isso iniciará um servidor local onde você pode conversar com a Cloudinha e visualizar os traces de execução, trocas de mensagens entre sub-agentes e chamadas de ferramentas.
 
-O servidor possui seu próprio `Dockerfile` para ser executado isoladamente ou composto.
+## 🛠️ Ferramentas (Tools)
 
-```bash
-docker build -t cloudinha-mcp .
-docker run --env-file .env cloudinha-mcp
-```
+O agente possui acesso a ferramentas específicas para cumprir suas funções:
+
+-   `getStudentProfile`: Recupera informações do perfil do estudante logado.
+-   `updateStudentProfile`: Atualiza dados e preferências do estudante no banco de dados.
+-   `searchOpportunities`: Realiza buscas avançadas por cursos e bolsas no catálogo.
+
+## 🧠 Configuração de IA
+
+O agente está configurado para utilizar o modelo `gemini-2.0-flash-exp` para garantir respostas rápidas e alta capacidade de raciocínio. As instruções de sistema (prompts) de cada agente ficam localizadas em `src/agent/util/`.
