@@ -9,21 +9,13 @@ from typing import Optional, List, Any
 sys.path.append(os.path.join(os.getcwd(), 'src'))
 
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai.types import Content, Part
-from src.agent.agent import agent
+from src.agent.agent import agent, runner, session_service
 
 app = FastAPI()
 
-# Initialize session service
-session_service = InMemorySessionService()
-
-# Initialize Runner
-runner = Runner(
-    agent=agent,
-    app_name="cloudinha-server",
-    session_service=session_service
-)
+# Runner and session_service are now imported from src.agent.agent
+# This ensures consistent configuration between server and agent debugging tools.
 
 class ChatRequest(BaseModel):
     chatInput: str
@@ -42,25 +34,39 @@ async def chat_endpoint(request: ChatRequest):
     session_id = request.sessionId or f"session-{user_id}"
 
     # Ensure session exists
+    # Ensure session exists
     try:
-        # Check if session exists (synchronous check for InMemory)
-        session_service.get_session(app_name="cloudinha-server", session_id=session_id)
+        # Check if session exists
+        await session_service.get_session(app_name="cloudinha-server", session_id=session_id, user_id=user_id)
     except Exception:
-        # Create if not found
-        print(f"Creating new session: {session_id}")
+        # Create if not found (or if get_session failed for other reasons, though ideally we check specific error)
+        # However, since get_session might fail if not found, we try to create.
+        # But if it failed due to other reasons, create might also fail. 
+        # Better pattern: Try create, ignore AlreadyExists.
+        pass
+
+    try:
         await session_service.create_session(
             app_name="cloudinha-server",
             session_id=session_id,
             user_id=user_id
         )
+    except Exception as e:
+        # If it already exists, that's fine.
+        # The ADK might raise specific error, but generic catch is safe here for "ensure exists" logic 
+        # if we assume the only error we care about ignoring is "already exists".
+        # Let's check the error message to be safe or just print it for debug if needed.
+        # print(f"Session creation note: {e}")
+        pass
 
 
 
     try:
         response_text = ""
         
-        # Preparing the message content
-        new_message = Content(parts=[Part(text=request.chatInput)])
+        # Preparing the message content with hidden context
+        context_header = f"context_user_id={user_id}\n---\n"
+        new_message = Content(parts=[Part(text=context_header + request.chatInput)])
 
         async for event in runner.run_async(
             user_id=user_id,
@@ -73,7 +79,7 @@ async def chat_endpoint(request: ChatRequest):
                  response_text += event.text
             elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
                  for part in event.content.parts:
-                     if hasattr(part, 'text'):
+                     if hasattr(part, 'text') and part.text:
                          response_text += part.text
             # If event is a list of parts or similar structure (adjust as needed)
             

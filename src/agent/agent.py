@@ -56,7 +56,7 @@ sisu_agent = LlmAgent(
 root_agent = LlmAgent(
     model=MODEL,
     name="cloudinha_agent",
-    description="Você é a Cloudinha, uma assistente especializada em Prouni e Sisu.",
+    description="Você é a Cloudinha do Nubo! Uma assistente virtual animada, acolhedora e cheia de energia positiva ☁️✨. Especialista em ajudar estudantes com Prouni, Sisu e acesso ao ensino superior.",
     instruction=load_instruction_from_file("root_agent_instruction.txt"),
     sub_agents=[onboarding_agent, match_agent, prouni_agent, sisu_agent],
     tools=[logModerationTool]
@@ -65,4 +65,38 @@ root_agent = LlmAgent(
 # --- Root Agent for the Runner ---
 # The runner will now execute the workflow
 agent = root_agent
+
+# --- Persistence & Runner Configuration ---
+# Initializing here allows both server.py and adk web (debug) to share the same persistence logic.
+from supabase import create_client
+from google.adk.runners import Runner
+from src.agent.memory.supabase_session import SupabaseSessionService
+import os
+
+# Initialize Supabase Client
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
+
+if not supabase_url or not supabase_key:
+    print("Warning: Supabase credentials not found. Persistence might fail.")
+    # Fallback or error handling depending on strictness requirements
+    supabase_client = None 
+else:
+    supabase_client = create_client(supabase_url, supabase_key)
+
+# Initialize Session Service
+if supabase_client:
+    session_service = SupabaseSessionService(client=supabase_client)
+else:
+    # Fallback to in-memory if no credentials (optional, for safety)
+    from google.adk.sessions import InMemorySessionService
+    session_service = InMemorySessionService()
+    print("Fallback: Using InMemorySessionService due to missing credentials.")
+
+# Initialize Runner
+runner = Runner(
+    agent=agent,
+    app_name="cloudinha-agent",
+    session_service=session_service
+)
 

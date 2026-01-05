@@ -93,3 +93,23 @@ O agente possui acesso a ferramentas específicas para cumprir suas funções:
 ## 🧠 Configuração de IA
 
 O agente está configurado para utilizar o modelo `gemini-2.0-flash-exp` para garantir respostas rápidas e alta capacidade de raciocínio. As instruções de sistema (prompts) de cada agente ficam localizadas em `src/agent/util/`.
+
+## 🚧 Melhorias Futuras (Roadmap de Robustez)
+
+Para tornar o agente pronto para produção em escala (Enterprise Grade), as seguintes evoluções estão planejadas:
+
+1.  **Gerenciamento de Sessão Persistente**
+    *   Substituir o armazenamento em memória por um banco de dados (Redis ou PostgreSQL).
+    *   Garantir a continuidade da conversa mesmo após reinicializações do servidor.
+
+2.  **Workflow Agents & Guardrails**
+    *   Implementar agentes de fluxo (Workflow Agents) para processos determinísticos (ex: Onboarding passo-a-passo).
+    *   Separar a camada de segurança (Guardrails) do modelo de linguagem principal para maior controle e menor custo.
+
+3.  **Saídas Estruturadas (Structured Output)**
+    *   Utilizar *Pydantic Models* para definir esquemas rígidos de resposta.
+    *   Garantir que dados complexos (como listas de cursos) sejam entregues em JSON confiável para o Frontend renderizar.
+
+4.  **Observabilidade**
+    *   Implementar Tracing distribuído (OpenTelemetry).
+    *   Configuração dinâmica de modelos via variáveis de ambiente para fácil fallback.
