@@ -11,6 +11,7 @@ sys.path.append(os.path.join(os.getcwd(), 'src'))
 from google.adk.runners import Runner
 from google.genai.types import Content, Part
 from src.agent.agent import agent, runner, session_service
+from src.agent.workflow import run_workflow
 
 app = FastAPI()
 
@@ -27,22 +28,18 @@ class ChatRequest(BaseModel):
 async def chat_endpoint(request: ChatRequest):
     print(f"Received request: {request}")
     
-    # Use provided userId or default to 'anon'
-    user_id = request.userId or "anon-user"
-    
-    # Use provided sessionId or generate one based on user_id (simple fallback)
+    # Enforce Authentication
+    if not request.userId or request.userId.strip() == "" or request.userId == "anon-user":
+         return {"response": "Desculpe, não posso falar com você se não estiver logado."}
+
+    user_id = request.userId
+    # Use provided sessionId or generate one based on user_id
     session_id = request.sessionId or f"session-{user_id}"
 
     # Ensure session exists
-    # Ensure session exists
     try:
-        # Check if session exists
         await session_service.get_session(app_name="cloudinha-server", session_id=session_id, user_id=user_id)
     except Exception:
-        # Create if not found (or if get_session failed for other reasons, though ideally we check specific error)
-        # However, since get_session might fail if not found, we try to create.
-        # But if it failed due to other reasons, create might also fail. 
-        # Better pattern: Try create, ignore AlreadyExists.
         pass
 
     try:
@@ -51,40 +48,33 @@ async def chat_endpoint(request: ChatRequest):
             session_id=session_id,
             user_id=user_id
         )
-    except Exception as e:
-        # If it already exists, that's fine.
-        # The ADK might raise specific error, but generic catch is safe here for "ensure exists" logic 
-        # if we assume the only error we care about ignoring is "already exists".
-        # Let's check the error message to be safe or just print it for debug if needed.
-        # print(f"Session creation note: {e}")
+    except Exception:
         pass
-
-
 
     try:
         response_text = ""
         
         # Preparing the message content with hidden context
+        # This context is still useful for root_agent
         context_header = f"context_user_id={user_id}\n---\n"
         new_message = Content(parts=[Part(text=context_header + request.chatInput)])
 
-        async for event in runner.run_async(
+        # Use the new workflow
+        async for event in run_workflow(
             user_id=user_id,
             session_id=session_id,
             new_message=new_message
         ):
             # Inspecting event structure
-            # Based on common ADK patterns, looking for ModelResponse or nested text
             if hasattr(event, 'text') and event.text:
                  response_text += event.text
             elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
                  for part in event.content.parts:
                      if hasattr(part, 'text') and part.text:
                          response_text += part.text
-            # If event is a list of parts or similar structure (adjust as needed)
-            
-            # Debugging event structure if response is empty
-            # print(f"Event: {event}")
+            # Handle SimpleTextEvent from workflow (for Auth/Block messages)
+            elif hasattr(event, "text"): 
+                response_text += event.text
 
         if not response_text:
             response_text = "Desculpe, não consegui processar sua solicitação."

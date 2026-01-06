@@ -74,13 +74,38 @@ cloudinha-agent/
 
 Com o ambiente ativado e configurado, você pode executar o agente utilizando a CLI do ADK.
 
+### Integração com Frontend / WhatsApp
+
+O agente expõe uma API REST em `http://localhost:8002/chat`.
+
+**Payload esperado (POST):**
+```json
+{
+  "chatInput": "Olá, Cloudinha!",
+  "userId": "12345",  // ID do Supabase ou Telefone (WhatsApp)
+  "history": []       // Opcional
+}
+```
+
+> **Nota Importante:** O `server.py` injeta automaticamente o `userId` no contexto da mensagem para que o agente saiba quem é o usuário.
+
+### Desenvolvimento Local (`adk web`)
+
 Para iniciar a interface web de debug do agente:
 
 ```bash
 adk web
 ```
 
-Isso iniciará um servidor local onde você pode conversar com a Cloudinha e visualizar os traces de execução, trocas de mensagens entre sub-agentes e chamadas de ferramentas.
+Isso iniciará um servidor local onde você pode conversar com a Cloudinha e visualizar os traces.
+
+**⚠️ Como testar identidade no `adk web`:**
+
+Como o `adk web` ignora o `server.py`, a injeção automática de ID não acontece. Para testar ferramentas que dependem de usuário (ex: `getStudentProfile`), você deve simular a injeção manualmente no chat:
+
+Digite: `context_user_id=SEU_ID_AQUI Olá Cloudinha!`
+
+Exemplo: `context_user_id=123-teste Quero ver meu perfil`
 
 ## 🛠️ Ferramentas (Tools)
 
