@@ -1,0 +1,19 @@
+Attributes in google.adk.sessions:
+BaseSessionService: <class 'google.adk.sessions.base_session_service.BaseSessionService'>
+InMemorySessionService: <class 'google.adk.sessions.in_memory_session_service.InMemorySessionService'>
+Session: <class 'google.adk.sessions.session.Session'>
+State: <class 'google.adk.sessions.state.State'>
+VertexAiSessionService: <class 'google.adk.sessions.vertex_ai_session_service.VertexAiSessionService'>
+_session_util: <module 'google.adk.sessions._session_util' from 'C:\\Users\\Bruno Bogochvol\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\google\\adk\\sessions\\_session_util.py'>
+base_session_service: <module 'google.adk.sessions.base_session_service' from 'C:\\Users\\Bruno Bogochvol\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\google\\adk\\sessions\\base_session_service.py'>
+in_memory_session_service: <module 'google.adk.sessions.in_memory_session_service' from 'C:\\Users\\Bruno Bogochvol\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\google\\adk\\sessions\\in_memory_session_service.py'>
+session: <module 'google.adk.sessions.session' from 'C:\\Users\\Bruno Bogochvol\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\google\\adk\\sessions\\session.py'>
+state: <module 'google.adk.sessions.state' from 'C:\\Users\\Bruno Bogochvol\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\google\\adk\\sessions\\state.py'>
+vertex_ai_session_service: <module 'google.adk.sessions.vertex_ai_session_service' from 'C:\\Users\\Bruno Bogochvol\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\google\\adk\\sessions\\vertex_ai_session_service.py'>
+
+Classes:
+BaseSessionService
+InMemorySessionService
+Session
+State
+VertexAiSessionService

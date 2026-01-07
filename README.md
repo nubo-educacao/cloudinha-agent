@@ -74,13 +74,38 @@ cloudinha-agent/
 
 Com o ambiente ativado e configurado, você pode executar o agente utilizando a CLI do ADK.
 
+### Integração com Frontend / WhatsApp
+
+O agente expõe uma API REST em `http://localhost:8002/chat`.
+
+**Payload esperado (POST):**
+```json
+{
+  "chatInput": "Olá, Cloudinha!",
+  "userId": "12345",  // ID do Supabase ou Telefone (WhatsApp)
+  "history": []       // Opcional
+}
+```
+
+> **Nota Importante:** O `server.py` injeta automaticamente o `userId` no contexto da mensagem para que o agente saiba quem é o usuário.
+
+### Desenvolvimento Local (`adk web`)
+
 Para iniciar a interface web de debug do agente:
 
 ```bash
 adk web
 ```
 
-Isso iniciará um servidor local onde você pode conversar com a Cloudinha e visualizar os traces de execução, trocas de mensagens entre sub-agentes e chamadas de ferramentas.
+Isso iniciará um servidor local onde você pode conversar com a Cloudinha e visualizar os traces.
+
+**⚠️ Como testar identidade no `adk web`:**
+
+Como o `adk web` ignora o `server.py`, a injeção automática de ID não acontece. Para testar ferramentas que dependem de usuário (ex: `getStudentProfile`), você deve simular a injeção manualmente no chat:
+
+Digite: `context_user_id=SEU_ID_AQUI Olá Cloudinha!`
+
+Exemplo: `context_user_id=123-teste Quero ver meu perfil`
 
 ## 🛠️ Ferramentas (Tools)
 
@@ -93,3 +118,23 @@ O agente possui acesso a ferramentas específicas para cumprir suas funções:
 ## 🧠 Configuração de IA
 
 O agente está configurado para utilizar o modelo `gemini-2.0-flash-exp` para garantir respostas rápidas e alta capacidade de raciocínio. As instruções de sistema (prompts) de cada agente ficam localizadas em `src/agent/util/`.
+
+## 🚧 Melhorias Futuras (Roadmap de Robustez)
+
+Para tornar o agente pronto para produção em escala (Enterprise Grade), as seguintes evoluções estão planejadas:
+
+1.  **Gerenciamento de Sessão Persistente**
+    *   Substituir o armazenamento em memória por um banco de dados (Redis ou PostgreSQL).
+    *   Garantir a continuidade da conversa mesmo após reinicializações do servidor.
+
+2.  **Workflow Agents & Guardrails**
+    *   Implementar agentes de fluxo (Workflow Agents) para processos determinísticos (ex: Onboarding passo-a-passo).
+    *   Separar a camada de segurança (Guardrails) do modelo de linguagem principal para maior controle e menor custo.
+
+3.  **Saídas Estruturadas (Structured Output)**
+    *   Utilizar *Pydantic Models* para definir esquemas rígidos de resposta.
+    *   Garantir que dados complexos (como listas de cursos) sejam entregues em JSON confiável para o Frontend renderizar.
+
+4.  **Observabilidade**
+    *   Implementar Tracing distribuído (OpenTelemetry).
+    *   Configuração dinâmica de modelos via variáveis de ambiente para fácil fallback.

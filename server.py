@@ -9,21 +9,14 @@ from typing import Optional, List, Any
 sys.path.append(os.path.join(os.getcwd(), 'src'))
 
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai.types import Content, Part
-from src.agent.agent import agent
+from src.agent.agent import agent, runner, session_service
+from src.agent.workflow import run_workflow
 
 app = FastAPI()
 
-# Initialize session service
-session_service = InMemorySessionService()
-
-# Initialize Runner
-runner = Runner(
-    agent=agent,
-    app_name="cloudinha-server",
-    session_service=session_service
-)
+# Runner and session_service are now imported from src.agent.agent
+# This ensures consistent configuration between server and agent debugging tools.
 
 class ChatRequest(BaseModel):
     chatInput: str
@@ -35,50 +28,53 @@ class ChatRequest(BaseModel):
 async def chat_endpoint(request: ChatRequest):
     print(f"Received request: {request}")
     
-    # Use provided userId or default to 'anon'
-    user_id = request.userId or "anon-user"
-    
-    # Use provided sessionId or generate one based on user_id (simple fallback)
+    # Enforce Authentication
+    if not request.userId or request.userId.strip() == "" or request.userId == "anon-user":
+         return {"response": "Desculpe, não posso falar com você se não estiver logado."}
+
+    user_id = request.userId
+    # Use provided sessionId or generate one based on user_id
     session_id = request.sessionId or f"session-{user_id}"
 
     # Ensure session exists
     try:
-        # Check if session exists (synchronous check for InMemory)
-        session_service.get_session(app_name="cloudinha-server", session_id=session_id)
+        await session_service.get_session(app_name="cloudinha-server", session_id=session_id, user_id=user_id)
     except Exception:
-        # Create if not found
-        print(f"Creating new session: {session_id}")
+        pass
+
+    try:
         await session_service.create_session(
             app_name="cloudinha-server",
             session_id=session_id,
             user_id=user_id
         )
-
-
+    except Exception:
+        pass
 
     try:
         response_text = ""
         
-        # Preparing the message content
-        new_message = Content(parts=[Part(text=request.chatInput)])
+        # Preparing the message content with hidden context
+        # This context is still useful for root_agent
+        context_header = f"context_user_id={user_id}\n---\n"
+        new_message = Content(parts=[Part(text=context_header + request.chatInput)])
 
-        async for event in runner.run_async(
+        # Use the new workflow
+        async for event in run_workflow(
             user_id=user_id,
             session_id=session_id,
             new_message=new_message
         ):
             # Inspecting event structure
-            # Based on common ADK patterns, looking for ModelResponse or nested text
             if hasattr(event, 'text') and event.text:
                  response_text += event.text
             elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
                  for part in event.content.parts:
-                     if hasattr(part, 'text'):
+                     if hasattr(part, 'text') and part.text:
                          response_text += part.text
-            # If event is a list of parts or similar structure (adjust as needed)
-            
-            # Debugging event structure if response is empty
-            # print(f"Event: {event}")
+            # Handle SimpleTextEvent from workflow (for Auth/Block messages)
+            elif hasattr(event, "text"): 
+                response_text += event.text
 
         if not response_text:
             response_text = "Desculpe, não consegui processar sua solicitação."

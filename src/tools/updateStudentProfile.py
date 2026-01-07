@@ -3,6 +3,7 @@ from src.lib.supabase import supabase
 
 def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     """Atualiza os dados do aluno durante a conversa."""
+    print(f"!!! [DEBUG TOOL] updateStudentProfileTool CALLED with user_id={user_id}, updates={updates}")
     
     results = {
         "profile_updated": False,
@@ -19,21 +20,24 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> Dict[str,
     if "full_name" in updates:
         profile_updates["full_name"] = updates["full_name"]
     if "academic_goal" in updates:
-        profile_updates["academic_goal"] = updates["academic_goal"]
+        profile_updates["education"] = updates["academic_goal"] # Support legacy input key
+    if "education" in updates:
+        profile_updates["education"] = updates["education"]
+    if "onboarding_completed" in updates:
+        profile_updates["onboarding_completed"] = updates["onboarding_completed"]
 
     if profile_updates:
         data = profile_updates.copy()
         data["id"] = user_id
         
         # Use upsert to ensure row exists
-        response = supabase.table("user_profiles").upsert(data, on_conflict="id").execute()
-        
-        # Supabase-py throws exception on error usually, but we check data presence to be safe? 
-        # Actually supabase-py execute returns APIResponse.
-        # If there's an error, it might raise postgrest.exceptions.APIError.
-        # We'll assume success if no exception for now or wrap in try/except if needed.
-        # For simple port, assuming normal operation.
-        results["profile_updated"] = True # Simplified check
+        try:
+            response = supabase.table("user_profiles").upsert(data, on_conflict="id").execute()
+            print(f"!!! [DEBUG WRITE] Update response: {response}")
+            results["profile_updated"] = True 
+        except Exception as e:
+            print(f"!!! [ERROR WRITE] Update FAILED: {e}")
+            results["errors"].append(str(e))
 
     # Update user_preferences if applicable
     preferences_updates = {}
