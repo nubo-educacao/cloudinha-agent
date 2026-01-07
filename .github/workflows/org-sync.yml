@@ -19,3 +19,4 @@ jobs:
   milestones:
     name: Milestones
     uses: nubo-educacao/.github/.github/workflows/reuse-sync-milestones.yml@main
+    ### THIS WORKS
