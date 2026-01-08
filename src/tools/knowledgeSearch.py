@@ -19,23 +19,28 @@ def knowledgeSearchTool(query: str, collection_name: str = "documents") -> str:
     """
     
     try:
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        embeddings_model = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
         
-        vector_store = SupabaseVectorStore(
-            client=supabase,
-            embedding=embeddings,
-            table_name=collection_name,
-            query_name="match_documents"
-        )
+        # 1. Generate Embedding
+        query_embedding = embeddings_model.embed_query(query)
         
-        # Search for top 3 relevant chunks
-        docs = vector_store.similarity_search(query, k=3)
+        # 2. Call RPC directly
+        # match_documents(query_embedding, match_threshold, match_count)
+        params = {
+            "query_embedding": query_embedding,
+            "match_threshold": 0.5, # Adjust threshold as needed
+            "match_count": 3
+        }
         
-        if not docs:
+        response = supabase.rpc("match_documents", params).execute()
+        
+        if not response.data:
             return "Não encontrei informações específicas sobre isso na minha base de conhecimento."
             
-        # Compile results
-        context_text = "\n\n".join([f"--- Contexto ---\n{doc.page_content}" for doc in docs])
+        # 3. Compile results
+        # response.data is a list of dicts: {content, metadata, similarity, ...}
+        docs = response.data
+        context_text = "\n\n".join([f"--- Contexto ---\n{doc.get('content', '')}" for doc in docs])
         return context_text
         
     except Exception as e:
