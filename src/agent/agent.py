@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
-from src.tools.searchOpportunities import searchOpportunitiesTool
+
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.logModeration import logModerationTool
@@ -24,15 +24,9 @@ onboarding_agent = LlmAgent(
     output_key="onboarding_report",
 )
 
-# --- Sub Agent 2: Match Agent ---
-match_agent = LlmAgent(
-    model=MODEL,
-    name="match_agent",
-    description="Você é o Match, um assistente especializado em Prouni e Sisu.",
-    instruction=load_instruction_from_file("match_agent_instruction.txt"),
-    tools=[searchOpportunitiesTool, getStudentProfileTool],
-    output_key="match_report",
-)
+# --- Sub Agent 2: Match Agent (REMOVED - Replaced by Match Workflow)
+# match_agent logic is now handled by src/agent/match_workflow.py triggered by active_workflow state.
+
 
 # --- Sub Agent 3: Prouni Agent (RAG) ---
 prouni_agent = LlmAgent(
@@ -59,8 +53,9 @@ root_agent = LlmAgent(
     name="cloudinha_agent",
     description="Você é a Cloudinha do Nubo! Uma assistente virtual animada, acolhedora e cheia de energia positiva ☁️✨. Especialista em ajudar estudantes com Prouni, Sisu e acesso ao ensino superior.",
     instruction=load_instruction_from_file("root_agent_instruction.txt"),
-    sub_agents=[match_agent, prouni_agent, sisu_agent],
-    tools=[logModerationTool, getStudentProfileTool]
+    # sub_agents=[prouni_agent, sisu_agent], # Match agent removed from direct sub-agents
+    sub_agents=[prouni_agent, sisu_agent],
+    tools=[logModerationTool, getStudentProfileTool, updateStudentProfileTool]
 )
 
 # --- Root Agent for the Runner ---

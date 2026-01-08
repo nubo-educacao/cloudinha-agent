@@ -25,6 +25,8 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> Dict[str,
         profile_updates["education"] = updates["education"]
     if "onboarding_completed" in updates:
         profile_updates["onboarding_completed"] = updates["onboarding_completed"]
+    if "active_workflow" in updates:
+        profile_updates["active_workflow"] = updates["active_workflow"]
 
     if profile_updates:
         data = profile_updates.copy()
@@ -45,6 +47,12 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> Dict[str,
         preferences_updates["enem_score"] = updates["enem_score"]
     if "per_capita_income" in updates:
         preferences_updates["family_income_per_capita"] = updates["per_capita_income"]
+    if "course_interest" in updates:
+        preferences_updates["course_interest"] = updates["course_interest"]
+    if "state_preference" in updates:
+        preferences_updates["state_preference"] = updates["state_preference"]
+    if "city_name" in updates:
+        preferences_updates["location_preference"] = updates["city_name"] # Duplicate city to prefs for easy query
     
     if preferences_updates:
         # Check existence manually first
