@@ -66,6 +66,10 @@ async def chat_endpoint(request: ChatRequest):
             new_message=new_message
         ):
             # Inspecting event structure
+            print(f"[DEBUG SERVER] Received event type: {type(event)}")
+            if hasattr(event, 'text'): print(f"  -> text: {event.text[:50]}...")
+            if hasattr(event, 'content'): print(f"  -> content parts: {len(event.content.parts) if event.content and event.content.parts else 0}")
+            
             if hasattr(event, 'text') and event.text:
                  response_text += event.text
             elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
@@ -79,6 +83,21 @@ async def chat_endpoint(request: ChatRequest):
         if not response_text:
             response_text = "Desculpe, não consegui processar sua solicitação."
 
+        # --- PERSISTENCE ---
+        # Explicitly save the turn to Supabase with the correct workflow tag
+        try:
+            current_session = await session_service.get_session(app_name="cloudinha-server", session_id=session_id, user_id=user_id)
+            if hasattr(current_session, "insert_messages"):
+                user_content = Content(role="user", parts=[Part(text=request.chatInput)])
+                agent_content = Content(role="model", parts=[Part(text=response_text)])
+                current_session.insert_messages([user_content, agent_content])
+            else:
+                 print("Warning: current_session does not support insert_messages")
+        except Exception as save_err:
+             print(f"Error saving chat history: {save_err}")
+             import traceback
+             traceback.print_exc()
+
         return {"response": response_text}
 
     except Exception as e:
@@ -89,4 +108,5 @@ async def chat_endpoint(request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)

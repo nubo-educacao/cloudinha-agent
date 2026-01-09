@@ -17,4 +17,5 @@ COPY . .
 ENV PYTHONPATH=/app
 
 # Default command to run the agent
-CMD ["python", "src/main.py"]
+# Cloud Run will define the PORT env variable
+CMD ["python", "server.py"]

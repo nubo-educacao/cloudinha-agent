@@ -3,6 +3,11 @@ from src.lib.supabase import supabase
 
 def getStudentProfileTool(user_id: str) -> Dict:
     """Recupera as informações socioeconômicas e de perfil do estudante salvas."""
+    
+    # --- DEBUG ALIAS ---
+    if user_id == "user":
+        user_id = "dac47479-079f-4878-bb43-009e4879fa8b"
+        print(f"!!! [DEBUG] Aliased 'user' to {user_id}")
 
     # Fetch user profile
     try:
