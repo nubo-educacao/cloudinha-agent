@@ -4,7 +4,7 @@ This agent is configured to run on Google Cloud Run, which is a low-cost, server
 
 ## Prerequisites
 
-1.  **Google Cloud SDK (gcloud)** installed and authenticated.
+1.  **Google Cloud SDK (gcloud)** installed and authenticated. [Download and Install Here](https://cloud.google.com/sdk/docs/install)
 2.  **Docker** installed (optional, but good for local testing).
 3.  **Project ID**: You need your Google Cloud Project ID.
 
@@ -14,7 +14,7 @@ This agent is configured to run on Google Cloud Run, which is a low-cost, server
 
 ```powershell
 gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
+gcloud config set project gen-lang-client-0831624563
 ```
 
 ### 2. Enable Required Services
