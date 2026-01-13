@@ -30,11 +30,10 @@ def getStudentProfileTool(user_id: str) -> Dict:
         profile_data = None
 
     # Fetch user preferences
-    # Fetch user preferences
     preferences_data = None
     try:
         preferences_response = supabase.table("user_preferences") \
-            .select("enem_score, family_income_per_capita, quota_types, course_interest, location_preference, state_preference") \
+            .select("enem_score, family_income_per_capita, quota_types, course_interest, location_preference, state_preference, preferred_shifts, university_preference, workflow_data") \
             .eq("user_id", user_id) \
             .execute()
             
@@ -63,6 +62,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
         "user_id": user_id,
         "onboarding_completed": onboarding_completed,
         "active_workflow": profile_data.get("active_workflow") if profile_data else None,
+        # workflow_data moved to preferences
         "full_name": profile_data.get("full_name") if profile_data else None,
         "city_name": profile_data.get("city") if profile_data else None,
         "age": profile_data.get("age") if profile_data else None,
@@ -72,5 +72,8 @@ def getStudentProfileTool(user_id: str) -> Dict:
         "course_interest": preferences_data.get("course_interest") if preferences_data else None,
         "location_preference": preferences_data.get("location_preference") if preferences_data else None,
         "state_preference": preferences_data.get("state_preference") if preferences_data else None,
-        "quota_types": preferences_data.get("quota_types", []) if preferences_data else []
+        "quota_types": preferences_data.get("quota_types", []) if preferences_data else [],
+        "preferred_shifts": preferences_data.get("preferred_shifts", []) if preferences_data else [],
+        "university_preference": preferences_data.get("university_preference") if preferences_data else None,
+        "workflow_data": preferences_data.get("workflow_data") if preferences_data else {}
     }

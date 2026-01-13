@@ -14,17 +14,36 @@ basic_prefs_agent = LlmAgent(
     description="Coleta Curso e Nota do ENEM.",
     instruction="""
     Você é o Match, especialista em conectar alunos a faculdades.
-    Seu objetivo agora é descobrir o **Curso de interesse** e a **Nota do ENEM** (ou estimativa) do aluno.
     
-    1. Pergunte qual curso o aluno quer (ex: Direito, Medicina, Engenharia).
-    2. Pergunte a nota do ENEM (ex: 600, 700).
+    **OBJETIVO**: Coletar 4 informações essenciais e buscar vagas.
+    1. **Curso** -> use chave `course_interest`
+    2. **Nota do ENEM** -> use chave `enem_score`
+    3. **Turno** (Matutino, Vespertino, Noturno) -> use chave `shift`
+    4. **Tipo de Instituição** (Pública ou Privada) -> use chave `institution_type`
     
-    Assim que o usuário fornecer essas informações:
-    1. Salve-as no perfil usando `updateStudentProfileTool` (busque campos compatíveis ou use 'course_interest' e 'enem_score' se existirem, senão adapte).
-       *Nota: O esquema atual do banco pode não ter 'course_interest' explícito nas colunas comuns, mas `updateStudentProfileTool` aceita dicionário. Vamos assumir que o agente tenta salvar.*
-    2. EXECUTE `searchOpportunitiesTool` com o nome do curso e a nota para mostrar opções iniciais.
+    **IDIOMA DE RESPOSTA**: Português (Brasil).
     
-    Mostre os resultados de forma resumida e empolgante.
+    1. **COLETA IMEDIATA**:
+       - Identifique no texto: **Curso**, **Nota** (ou "não fiz"), **Turno** (ou "tanto faz"), **Instituição** (ou "tanto faz").
+       
+    **FLUXO DE AÇÃO OBRIGATÓRIO**:
+    
+    1. **EXTRAÇÃO E SALVAMENTO (SEMPRE)**:
+       - Se o usuário falou QUALQUER informação (Curso, Nota, Turno ou Instituição):
+         - **AÇÃO**: Chame `updateStudentProfileTool` IMEDIATAMENTE com os dados que você encontrou.
+         - Exemplo: Se ele disse "Quero direito", chame `updateStudentProfileTool(course_interest="direito")`.
+         - **NÃO ESPERE TER TUDO. SALVE O QUE TIVER.**
+
+    2. **VERIFICAÇÃO PÓS-FERRAMENTA**:
+       - A ferramenta retornará o status.
+       - Se retornar `auto_search_results`: **ENCERRE** (Não diga nada).
+       - Se retornar sucesso mas SEM busca:
+         - Verifique o que ainda falta (Curso? Nota? Turno? Inst?).
+         - **AÇÃO**: Pergunte **APENAS** o que falta.
+
+    3. **QUANDO NÃO HÁ DADOS**:
+       - Se o usuário não disse nada relevante (ex: "Oi", "Tudo bem") ou se é o início da interação:
+         - Pergunte de uma vez: "Para te ajudar, qual curso você busca, sua nota do ENEM, turno (manhã/tarde/noite) e tipo de instituição (pública/privada)?"
     """,
     tools=[updateStudentProfileTool, searchOpportunitiesTool],
 )
@@ -77,7 +96,15 @@ def check_basic_prefs(state):
     # course_interest is now returned by getStudentProfileTool correctly
     has_course = bool(state.get("course_interest")) 
     has_score = state.get("enem_score") is not None
-    return has_course and has_score
+    # Check if preferred_shifts list exists and has at least one item
+    has_shift = bool(state.get("preferred_shifts")) and len(state.get("preferred_shifts")) > 0
+    has_inst_type = bool(state.get("university_preference"))
+    
+    # Check for User Confirmation (prevent premature advance)
+    workflow_data = state.get("workflow_data") or {}
+    is_confirmed = workflow_data.get("match_search_confirmed") is True
+    
+    return has_course and has_score and has_shift and has_inst_type and is_confirmed
 
 def check_socioeconomic(state):
     # Check for income

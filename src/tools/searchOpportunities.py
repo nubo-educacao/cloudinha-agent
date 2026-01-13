@@ -1,4 +1,5 @@
 import re
+import json
 from typing import Optional
 from src.lib.supabase import supabase
 from geopy.geocoders import Nominatim
@@ -40,9 +41,11 @@ def get_city_coordinates(city_name: str):
 def searchOpportunitiesTool(
     course_name: str,
     enem_score: float,
-    per_capita_income: float,
-    city_name: Optional[str] = None
-) -> list:
+    per_capita_income: Optional[float] = None,
+    city_name: Optional[str] = None,
+    shift: Optional[str] = None,
+    institution_type: Optional[str] = None
+) -> str:
     """
     Busca e filtra vagas de Sisu e Prouni no banco de dados. 
     Se city_name for fornecido, prioriza resultados nesta cidade e tenta calcular proximidade.
@@ -59,54 +62,126 @@ def searchOpportunitiesTool(
     if city_name:
         city_name = sanitize_search_input(city_name)
     
-    # 1. Base Query
-    query = supabase.table("opportunities_view") \
-        .select("course_id, institution, course, type, scholarship_type, cutoff_score, city") \
-        .ilike("course", f"%{course_name}%") \
-        .lte("cutoff_score", enem_score)
-
-    # Note: We are NOT strict filtering by city initially because we want "Next to you" which implies nearby too,
-    # but for V1 we prioritize exact matches. If the list is huge, we might need to filter.
-    # Given the prompt says "Próximas a você com base na cidade", strict filtering is safer for performance 
-    # unless we have PostGIS.
+    # 1. Prepare RPC Parameters
+    page_number = 0
+    page_size = 20 # Fetch enough courses to find opportunities
     
-    # If explicit city provided, let's look for it OR all. 
-    # For now, let's fetch more results and sort in Python if needed, 
-    # OR if limit is small, maybe just filter by city if strict preference?
-    # The prompt implies sorting.
-    
-    # 2. Execute Query
-    limit = 72
+    # Map institution_type to RPC category
+    category = None
+    if institution_type:
+        itype = institution_type.lower()
+        if "púb" in itype or "pub" in itype:
+            category = 'SISU'
+        elif "priv" in itype:
+            category = 'Prouni'
+            
+    # Determine Sort Strategy
+    sort_by = 'relevancia' # Default
     if city_name:
-        # Optimistic approach: Get matches in city first
-        # Use .ilike() for safe parameter handling instead of raw .or_() string interpolation
-        query = query.ilike("city", f"%{city_name}%")
-        # Fallback to simple query logic:
-        # Let's just fetch results sorted by score for now, and re-sort in Python
-        pass
+        sort_by = 'proximas'
+        
+    rpc_params = {
+        "page_number": page_number,
+        "page_size": page_size,
+        "search_query": course_name,
+        "category": category,
+        "sort_by": sort_by,
+        "user_city": city_name,
+        # "user_state": ... # We could accept state if available
+    }
 
-    response = query.order("cutoff_score", desc=False).limit(limit).execute()
-    opportunities = response.data
+    print(f"!!! [DEBUG SEARCH] Calling RPC get_courses_with_opportunities with {rpc_params}")
 
-    if not opportunities:
+    response = supabase.rpc("get_courses_with_opportunities", rpc_params).execute()
+    courses = response.data
+
+    if not courses:
         return []
 
-    # 3. Geo Sorting (Python Side)
-    if city_name:
-        # Get User Coords (just for reference or future calc)
-        # user_coords = get_city_coordinates(city_name)
+    # 2. Process and Filter Results (Python Side)
+    # We want to return a list of Courses (grouped), not flat opportunities.
+    # This matches CourseDisplayData for the frontend.
+    
+    grouped_courses = []
+    
+    normalized_shift_filter = str(shift).lower() if shift else None
+    
+    for course in courses:
+        # Each course has an 'opportunities' list
+        raw_opps = course.get("opportunities") or []
+        filtered_opps = []
         
-        # Sort logic: 
-        # Priority 1: Exact City Match (Case insensitive)
-        # Priority 2: Cutoff Score (Ascending - already sorted by DB, but python sort is stable)
-        
-        normalized_user_city = city_name.lower().strip()
-        
-        def sort_key(opp):
-            opp_city = (opp.get("city") or "").lower().strip()
-            is_same_city = opp_city == normalized_user_city
-            return (not is_same_city, opp.get("cutoff_score")) # False < True, so Same City first
-            
-        opportunities.sort(key=sort_key)
+        for opp in raw_opps:
+            # Filter by Cutoff Score
+            # Only filter if user has a valid score (>0)
+            if enem_score and enem_score > 0:
+                opp_score = opp.get("cutoff_score")
+                if opp_score and opp_score > enem_score:
+                    continue
+                
+            # Filter by Shift
+            if shift:
+                # Normalize `shift` argument to a set of lower-case strings for checking
+                if isinstance(shift, list):
+                    target_shifts = {s.lower() for s in shift if s}
+                elif isinstance(shift, str):
+                    target_shifts = {shift.lower()}
+                else:
+                    target_shifts = set()
 
-    return opportunities
+                # Check for indifference
+                is_indifferent = any(x in target_shifts for x in ["indiferente", "tanto faz", "qualquer", "todos"])
+                
+                if not is_indifferent and target_shifts:
+                    opp_shift = str(opp.get("shift", "")).lower()
+                    # Check if ANY of the target shifts matches the opportunity shift
+                    # (e.g. target=['matutino'], opp='Integral' -> No match?)
+                    # Usually stricter match: if target has 'matutino', opp must be 'matutino'.
+                    
+                    match = False
+                    for t in target_shifts:
+                        if t in opp_shift or opp_shift in t:
+                            match = True
+                            break
+                    
+                    if not match:
+                        continue
+
+            # Construct Opportunity Item
+            filtered_opps.append({
+                "id": opp.get("id"),
+                "shift": opp.get("shift"),
+                "scholarship_type": opp.get("scholarship_type"),
+                "opportunity_type": opp.get("opportunity_type"),
+                "cutoff_score": opp.get("cutoff_score"),
+                # Add tags if needed, e.g. from concurrency_tags
+            })
+            
+        # Only add course if it has matching opportunities
+        if filtered_opps:
+            # Map Course Fields to match CourseDisplayData
+            # CourseDisplayData: { id, title, institution, location, logoUrl, opportunities: [...] }
+            # Note: logoUrl is not in DB yet, can be mocked or omitted.
+            
+            grouped_courses.append({
+                "id": course.get("id"),
+                "title": course.get("course_name"),
+                "institution": course.get("institution_name"),
+                "location": f"{course.get('city')} - {course.get('state')}",
+                "distance_km": course.get("distance_km"),
+                "opportunities": filtered_opps
+            })
+
+    # Extract only IDs for the agent/frontend
+    course_ids = [c["id"] for c in grouped_courses]
+    total_found = sum(len(c["opportunities"]) for c in grouped_courses)
+    
+    result_payload = {
+        "summary": f"Found {total_found} opportunities in {len(course_ids)} courses.",
+        "total_opportunities": total_found,
+        "total_courses": len(course_ids),
+        "course_ids": course_ids
+    }
+
+    # Return as JSON string
+    return json.dumps(result_payload, ensure_ascii=False)

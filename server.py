@@ -132,6 +132,8 @@ async def chat_endpoint(request: ChatRequest):
             
             # current_text_chunk moved inside loop
 
+            has_sent_events = False
+
             try:
                 async for event in run_workflow(user_id, session_id, new_message):
                     # Debug Log
@@ -150,6 +152,7 @@ async def chat_endpoint(request: ChatRequest):
                         json_output = json.dumps(event)
                         print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                         yield json_output + "\n"
+                        has_sent_events = True
 
                         continue
 
@@ -169,6 +172,7 @@ async def chat_endpoint(request: ChatRequest):
                                      print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                                      print(f"[DEBUG SERVER] Sending tool_start for {part.function_call.name}", flush=True)
                                      yield json_output + "\n"
+                                     has_sent_events = True
 
                                  
                                  if part.function_response:
@@ -176,7 +180,7 @@ async def chat_endpoint(request: ChatRequest):
                                       tool_name = getattr(part.function_response, 'name', 'unknown_tool')
                                       
                                       # Serialize response content into a string for UI
-                                      response_content = str(part.function_response.response)[:150] # Truncate slightly larger
+                                      response_content = str(part.function_response.response) # Do not truncate! Frontend needs full data.
                                       
                                       payload = {
                                           "type": "tool_end",
@@ -187,6 +191,7 @@ async def chat_endpoint(request: ChatRequest):
                                       print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                                       print(f"[DEBUG SERVER] Sending tool_end for {tool_name}", flush=True)
                                       yield json_output + "\n"
+                                      has_sent_events = True
 
                                       
                                  if part.text:
@@ -207,10 +212,11 @@ async def chat_endpoint(request: ChatRequest):
                                 print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                                 print(f"[DEBUG SERVER] Sending tool_start for {part.function_call.name} (from content)", flush=True)
                                 yield json_output + "\n"
+                                has_sent_events = True
 
                             if part.function_response:
                                 tool_name = getattr(part.function_response, 'name', 'unknown_tool')
-                                response_content = str(part.function_response.response)[:150]
+                                response_content = str(part.function_response.response)
                                 payload = {
                                     "type": "tool_end",
                                     "tool": tool_name,
@@ -220,6 +226,7 @@ async def chat_endpoint(request: ChatRequest):
                                 print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                                 print(f"[DEBUG SERVER] Sending tool_end for {tool_name} (from content)", flush=True)
                                 yield json_output + "\n"
+                                has_sent_events = True
 
                             if hasattr(part, 'text') and part.text:
                                 current_text_chunk += part.text
@@ -233,6 +240,7 @@ async def chat_endpoint(request: ChatRequest):
                         json_output = json.dumps(payload)
                         print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                         yield json_output + "\n"
+                        has_sent_events = True
 
                         # Reset chunk for next iteration to send only deltas
                         current_text_chunk = ""
@@ -247,7 +255,7 @@ async def chat_endpoint(request: ChatRequest):
                  yield error_msg + "\n"
                  return
 
-            if not full_response_text:
+            if not full_response_text and not has_sent_events:
                 # If nothing came back, send a default
                 payload = {"type": "text", "content": "Desculpe, não consegui processar."}
                 yield json.dumps(payload) + "\n"
