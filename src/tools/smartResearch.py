@@ -9,7 +9,7 @@ logger = logging.getLogger("cloudinha-server")
 
 # Initialize client for verification
 # We use a cheaper model if possible, or the same one.
-VERIFICATION_MODEL = "gemini-2.0-flash-exp" 
+VERIFICATION_MODEL = "gemini-1.5-flash" 
 
 async def smartResearchTool(query: str, collection_name: str = "documents") -> str:
     """

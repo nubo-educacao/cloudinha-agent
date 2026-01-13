@@ -117,7 +117,7 @@ O agente possui acesso a ferramentas específicas para cumprir suas funções:
 
 ## 🧠 Configuração de IA
 
-O agente está configurado para utilizar o modelo `gemini-2.0-flash-exp` para garantir respostas rápidas e alta capacidade de raciocínio. As instruções de sistema (prompts) de cada agente ficam localizadas em `src/agent/util/`.
+O agente está configurado para utilizar o modelo `gemini-1.5-flash` para garantir respostas rápidas e alta capacidade de raciocínio. As instruções de sistema (prompts) de cada agente ficam localizadas em `src/agent/util/`.
 
 ## 🚧 Melhorias Futuras (Roadmap de Robustez)
 
