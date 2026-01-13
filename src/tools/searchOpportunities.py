@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 from src.lib.supabase import supabase
 from geopy.geocoders import Nominatim
@@ -5,6 +6,16 @@ from geopy.exc import GeocoderTimedOut
 
 # Cache for city coordinates to avoid repeated API calls
 _CITY_COORDS_CACHE = {}
+
+def sanitize_search_input(text: str) -> str:
+    """
+    Sanitize input string by removing potentially dangerous characters.
+    Allows alphanumeric, spaces, hyphens, periods, and accents.
+    """
+    if not text:
+        return ""
+    # Keep only safe characters: letters (including unicode), numbers, spaces, - and .
+    return re.sub(r'[^a-zA-ZÀ-ÿ0-9\s\-\.]', '', text)
 
 def get_city_coordinates(city_name: str):
     """
@@ -37,6 +48,17 @@ def searchOpportunitiesTool(
     Se city_name for fornecido, prioriza resultados nesta cidade e tenta calcular proximidade.
     """
     
+    # 0. Sanitize Inputs
+    course_name = sanitize_search_input(course_name)
+    if not course_name: 
+        # If sanitization removed everything (or it was empty), might want to abort or allow broad search?
+        # For safety, let's proceed with empty, but the LIKE %% might return everything if not careful.
+        # But course_name is required. If empty, return empty.
+        return []
+
+    if city_name:
+        city_name = sanitize_search_input(city_name)
+    
     # 1. Base Query
     query = supabase.table("opportunities_view") \
         .select("course_id, institution, course, type, scholarship_type, cutoff_score, city") \
@@ -57,7 +79,8 @@ def searchOpportunitiesTool(
     limit = 72
     if city_name:
         # Optimistic approach: Get matches in city first
-        query = query.or_(f"city.ilike.%{city_name}%") # This syntax might be tricky in simple client
+        # Use .ilike() for safe parameter handling instead of raw .or_() string interpolation
+        query = query.ilike("city", f"%{city_name}%")
         # Fallback to simple query logic:
         # Let's just fetch results sorted by score for now, and re-sort in Python
         pass
