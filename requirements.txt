@@ -14,3 +14,4 @@ fastapi
 uvicorn
 google-genai
 tenacity
+ddgs
