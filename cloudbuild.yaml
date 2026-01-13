@@ -10,6 +10,20 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/cloudinha-agent:latest']
 
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+    - 'run'
+    - 'deploy'
+    - 'cloudinha-agent'
+    - '--image'
+    - 'gcr.io/$PROJECT_ID/cloudinha-agent:$SHORT_SHA'
+    - '--region'
+    - 'southamerica-east1'
+    - '--platform'
+    - 'managed'
+
 images:
   - 'gcr.io/$PROJECT_ID/cloudinha-agent:$SHORT_SHA'
   - 'gcr.io/$PROJECT_ID/cloudinha-agent:latest'
