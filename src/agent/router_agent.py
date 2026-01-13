@@ -41,7 +41,7 @@ Você NÃO deve conversar. Apenas retorne um JSON estrito:
 """
 
 router_agent = LlmAgent(
-    model="gemini-1.5-flash", # Fast model strictly for routing
+    model="gemini-2.0-flash", # Fast model strictly for routing
     name="router_agent",
     description="Classifies user intent to route to the correct workflow.",
     instruction=ROUTER_INSTRUCTION,

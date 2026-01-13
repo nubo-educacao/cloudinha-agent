@@ -3,7 +3,7 @@ from src.tools.logModeration import logModerationTool
 from .utils import load_instruction_from_file
 
 # Define Model (can duplicate from agent.py or import config if available, using strict string for now to match agent.py)
-MODEL = "gemini-1.5-flash"
+MODEL = "gemini-2.0-flash"
 
 guardrails_agent = LlmAgent(
     model=MODEL,
