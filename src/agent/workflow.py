@@ -6,6 +6,9 @@ from src.agent.guardrails import guardrails_agent
 from google.adk.sessions import InMemorySessionService
 from src.agent.onboarding_workflow import onboarding_workflow
 from src.agent.match_workflow import match_workflow
+from src.agent.router_agent import router_agent
+import re
+import json
 import functools
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.getStudentProfile import getStudentProfileTool
@@ -83,8 +86,81 @@ async def run_workflow(
         current_message = new_message
         
         while steps_run < MAX_STEPS:
-            # Determine Active Workflow
+            # --- ROUTER AGENT (CONTEXT SWITCHING) ---
+            # 0. Fetch state at start of iteration
             profile_state = getStudentProfileTool(user_id)
+
+            # --- ROUTER AGENT (CONTEXT SWITCHING) ---
+            if steps_run == 0:
+                 if profile_state.get("onboarding_completed"):
+                     try:
+                         # Prepare Context for Router
+                         router_input_text = f"MENSAGEM: {new_message.parts[0].text if new_message.parts else ''}\n\nESTADO ATUAL:\nactive_workflow: {profile_state.get('active_workflow')}\nonboarding_completed: {profile_state.get('onboarding_completed')}"
+                         
+                         router_msg = Content(role="user", parts=[Part(text=router_input_text)])
+                         
+                         # Run Router (Transient)
+                         await transient_session_service.create_session(
+                             app_name="router_check",
+                             session_id=session_id,
+                             user_id=user_id
+                         )
+                         router_runner = Runner(agent=router_agent, app_name="router_check", session_service=transient_session_service)
+                         router_response = ""
+                         
+                         async for r_event in router_runner.run_async(user_id=user_id, session_id=session_id, new_message=router_msg):
+                             if hasattr(r_event, 'text') and r_event.text:
+                                 router_response += r_event.text
+                             elif hasattr(r_event, 'content') and r_event.content.parts:
+                                 for p in r_event.content.parts:
+                                     if p.text: router_response += p.text
+                         
+                         # Parse JSON
+                         json_match = re.search(r"\{.*\}", router_response, re.DOTALL)
+                         if json_match:
+                             decision = json.loads(json_match.group(0))
+                             print(f"[Router decision]: {decision}")
+                             
+                             if decision.get("intent") == "CHANGE_WORKFLOW":
+                                 target = decision.get("target_workflow")
+                                 print(f"[Router Action] Switching to {target}")
+                                 
+                                 # Yield Manual Tool Event for UI Feedback
+                                 yield {
+                                     "type": "tool_start",
+                                     "tool": "RouterAgent",
+                                     "args": {"action": "switch_context", "target": target}
+                                 }
+                                 
+                                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": target})
+                                 profile_state["active_workflow"] = target # Update in-memory
+                                 
+                                 yield {
+                                     "type": "tool_end",
+                                     "tool": "RouterAgent",
+                                     "output": f"Contexto alterado para {target}"
+                                 }
+                                 
+                             elif decision.get("intent") == "EXIT_WORKFLOW":
+                                 print(f"[Router Action] Exiting workflow")
+                                 
+                                 yield {
+                                     "type": "tool_start", 
+                                     "tool": "RouterAgent",
+                                     "args": {"action": "exit_workflow"}
+                                 }
+                                 
+                                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
+                                 profile_state["active_workflow"] = None # Update in-memory
+                                 
+                                 yield {
+                                     "type": "tool_end",
+                                     "tool": "RouterAgent",
+                                     "output": "Workflow encerrado"
+                                 }
+                                 
+                     except Exception as e:
+                         print(f"[Router Error]: {e}")
             active_workflow_obj = None
             active_step_agent = None
             
@@ -163,12 +239,27 @@ async def run_workflow(
                    session_service=session_service
                  )
                  
+                 # Yield Manual Start Event for the Specialized Agent
+                 # This makes "Perguntando pro Especialista Sisu" appear in the UI even if no inner tools are used.
+                 yield {
+                     "type": "tool_start",
+                     "tool": active_step_agent.name,
+                     "args": {"workflow": workflow_name}
+                 }
+
                  async for event in step_runner.run_async(
                    user_id=user_id,
                    session_id=session_id,
                    new_message=current_message
                  ):
                      yield event
+                 
+                 # Yield Manual End Event
+                 yield {
+                     "type": "tool_end",
+                     "tool": active_step_agent.name,
+                     "output": "Resposta gerada"
+                 }
                  
                  # Check Transition
                  if active_workflow_obj:

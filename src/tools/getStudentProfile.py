@@ -10,27 +10,39 @@ def getStudentProfileTool(user_id: str) -> Dict:
         print(f"!!! [DEBUG] Aliased 'user' to {user_id}")
 
     # Fetch user profile
+    # Fetch user profile
+    profile_data = None
     try:
+        # Use simple select and handle list manually to avoid maybe_single 406 issues
         profile_response = supabase.table("user_profiles") \
             .select("full_name, city, age, education, onboarding_completed, active_workflow") \
             .eq("id", user_id) \
-            .maybe_single() \
             .execute()
-        profile_data = profile_response.data
+        
+        # Check if response exists and has data
+        if profile_response and hasattr(profile_response, 'data') and profile_response.data:
+            if len(profile_response.data) > 0:
+                profile_data = profile_response.data[0]
+        
         print(f"!!! [DEBUG READ] getStudentProfileTool raw profile for {user_id}: {profile_data}")
     except Exception as e:
         print(f"!!! [ERROR READ] getStudentProfileTool FAILED: {e}")
         profile_data = None
 
     # Fetch user preferences
+    # Fetch user preferences
+    preferences_data = None
     try:
         preferences_response = supabase.table("user_preferences") \
             .select("enem_score, family_income_per_capita, quota_types, course_interest, location_preference, state_preference") \
             .eq("user_id", user_id) \
-            .maybe_single() \
             .execute()
-        preferences_data = preferences_response.data
-    except Exception:
+            
+        if preferences_response and hasattr(preferences_response, 'data') and preferences_response.data:
+             if len(preferences_response.data) > 0:
+                preferences_data = preferences_response.data[0]
+    except Exception as e:
+        print(f"!!! [ERROR READ] Preferences fetch failed: {e}")
         preferences_data = None
     
     # Calculate onboarding status

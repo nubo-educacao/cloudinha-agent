@@ -4,8 +4,8 @@ from google.adk.agents import LlmAgent
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.logModeration import logModerationTool
-from src.tools.knowledgeSearch import knowledgeSearchTool
 from src.tools.getImportantDates import getImportantDatesTool
+from src.tools.smartResearch import smartResearchTool
 from .utils import load_instruction_from_file
 
 load_dotenv()
@@ -34,7 +34,7 @@ prouni_agent = LlmAgent(
     name="prouni_agent",
     description="Especialista no Programa Universidade para Todos (Prouni). Responde dúvidas sobre bolsas, regras e documentação.",
     instruction=load_instruction_from_file("prouni_agent_instruction.txt"),
-    tools=[knowledgeSearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool],
+    tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool],
     output_key="prouni_report",
 )
 
@@ -44,7 +44,7 @@ sisu_agent = LlmAgent(
     name="sisu_agent",
     description="Especialista no Sistema de Seleção Unificada (Sisu). Responde dúvidas sobre inscrição, nota de corte e cotas.",
     instruction=load_instruction_from_file("sisu_agent_instruction.txt"),
-    tools=[knowledgeSearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool],
+    tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool],
     output_key="sisu_report",
 )
 
