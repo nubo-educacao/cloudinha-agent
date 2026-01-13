@@ -3,6 +3,12 @@ from src.lib.supabase import supabase
 
 def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     """Atualiza os dados do aluno durante a conversa."""
+    
+    # --- DEBUG ALIAS ---
+    if user_id == "user":
+        user_id = "dac47479-079f-4878-bb43-009e4879fa8b"
+        print(f"!!! [DEBUG] Aliased 'user' to {user_id}")
+
     print(f"!!! [DEBUG TOOL] updateStudentProfileTool CALLED with user_id={user_id}, updates={updates}")
     
     results = {
@@ -62,7 +68,7 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> Dict[str,
             .maybe_single() \
             .execute()
         
-        existing_prefs = existing_prefs_response.data
+        existing_prefs = existing_prefs_response.data if existing_prefs_response else None
 
         if existing_prefs:
             # Update

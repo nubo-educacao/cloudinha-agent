@@ -40,7 +40,8 @@ city_agent = LlmAgent(
     description="Coleta a cidade do usuário.",
     instruction="""
     Você é a Cloudinha. Pergunte em qual cidade e estado o usuário mora.
-    Assim que o usuário responder, use a ferramenta `updateStudentProfileTool` para salvar `city_name`.
+    Assim que o usuário responder (ex: "São Paulo - SP", "Rio de Janeiro"), VOCÊ DEVE EXECUTAR IMEDIATAMENTE a ferramenta `updateStudentProfileTool` com `updates={"city_name": "Cidade - UF"}`.
+    NÃO peça confirmação. APENAS SALVE.
     """,
     tools=[updateStudentProfileTool],
 )
