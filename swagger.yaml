@@ -51,6 +51,10 @@ components:
           type: array
           items:
             type: string
+        workflow_data:
+          type: object
+          additionalProperties: true
+          description: Dynamic JSON data for storing workflow state overrides or flags.
     Opportunity:
       type: object
       description: Read-only view of opportunities
