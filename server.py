@@ -132,13 +132,13 @@ async def chat_endpoint(request: ChatRequest):
             
             # current_text_chunk moved inside loop
 
-
             try:
                 async for event in run_workflow(user_id, session_id, new_message):
                     # Debug Log
                     # logger.info(f"[RAW EVENT]: {event}")
                     # Force print to terminal for debugging visibility
                     print(f"[RAW EVENT]: {event}", flush=True)
+
 
 
                     # Ensure chunk is clean for this event
@@ -271,4 +271,5 @@ async def chat_endpoint(request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)

@@ -1,7 +1,7 @@
 from typing import AsyncGenerator, Any
 from google.adk.runners import Runner
 from google.genai.types import Content, Part
-from src.agent.agent import root_agent, session_service
+from src.agent.agent import root_agent, session_service, sisu_agent, prouni_agent
 from src.agent.guardrails import guardrails_agent
 from google.adk.sessions import InMemorySessionService
 from src.agent.onboarding_workflow import onboarding_workflow
@@ -162,57 +162,64 @@ async def run_workflow(
                      except Exception as e:
                          print(f"[Router Error]: {e}")
             active_workflow_obj = None
+            active_step_agent = None
             
             # Logic:
             # 1. Onboarding not completed -> Onboarding Workflow
             # 2. Onboarding completed AND active_workflow == "match" -> Match Workflow
-            # 3. Else -> Root Agent (break loop)
+            # 3. active_workflow == "sisu" -> Sisu Agent (direct)
+            # 4. active_workflow == "prouni" -> Prouni Agent (direct)
+            # 5. Else -> Root Agent (break loop)
             
             if not profile_state.get("onboarding_completed"):
                  active_workflow_obj = onboarding_workflow
             elif profile_state.get("active_workflow") == "match_workflow":
                  active_workflow_obj = match_workflow
+            elif profile_state.get("active_workflow") == "sisu_workflow":
+                 active_step_agent = sisu_agent
+            elif profile_state.get("active_workflow") == "prouni_workflow":
+                 active_step_agent = prouni_agent
             
             if active_workflow_obj:
                  # Check Step
                  active_step_agent = active_workflow_obj.get_agent_for_user(user_id)
+            
+            # --- CONTEXT ISOLATION ---
+            # Set the active workflow on the session to isolate chat history
+            try:
+                # We need to access the session instance. Assuming session_service manages one per user/session_id.
+                # Since session_service.get_session is async, we may need to await it or rely on cache if allowed.
+                # However, session_service is global. 
+                # Let's await it to be safe, though purely synchronous might be needed if inside a non-async loop part? 
+                # No, run_workflow is async.
+                
+                # Determine workflow tag
+                workflow_tag = None
+                if active_workflow_obj:
+                     workflow_tag = active_workflow_obj.name
+                elif active_step_agent:
+                     # For direct agents (Sisu/Prouni)
+                     if profile_state.get("active_workflow") in ["sisu_workflow", "prouni_workflow"]:
+                          workflow_tag = profile_state.get("active_workflow")
+                
+                # Retrieve and update session
+                current_session = await session_service.get_session(app_name="cloudinha-agent", session_id=session_id, user_id=user_id)
+                if hasattr(current_session, "active_workflow"):
+                     print(f"[DEBUG ISOLATION] Setting session active_workflow to: {workflow_tag}")
+                     current_session.active_workflow = workflow_tag
+                     print(f"[DEBUG ISOLATION] Session object: {id(current_session)}, Verified active_workflow: {current_session.active_workflow}")
+                     # Clear local message cache if workflow changed? 
+                     # SupabaseSession load() handles this if logic is robust, but explicit reload might be needed if cache persists.
+                     # For now, let's rely on load() being called by Runner.
+                     
+            except Exception as e:
+                print(f"Error setting session workflow context: {e}")
+
+            if active_step_agent:
+                 # For workflow objects, log the name
+                 workflow_name = active_workflow_obj.name if active_workflow_obj else "direct_agent"
+                 print(f"[Workflow] User {user_id} in workflow '{workflow_name}' step: {active_step_agent.name}")
                  
-<<<<<<< Updated upstream
-                 if active_step_agent:
-                      print(f"[Workflow] User {user_id} in workflow '{active_workflow_obj.name}' step: {active_step_agent.name}")
-                      
-                      # --- DYNAMIC TOOL WRAPPER ---
-                      # We create a fresh instance to ensure clean state if needed, though mostly stateless.
-                      from google.adk.agents import LlmAgent
-                      
-                      # For Onboarding, we used a wrapper to help with args.
-                      # For Match, we use tools directly.
-                      # We can keep it simple here and just use the step agent's tools.
-                      
-                      step_agent_instance = LlmAgent(
-                          model=active_step_agent.model,
-                          name=active_step_agent.name,
-                          description=active_step_agent.description,
-                          instruction=active_step_agent.instruction,
-                          tools=active_step_agent.tools,
-                          output_key=active_step_agent.output_key
-                      )
-                      
-                      step_runner = Runner(
-                        agent=step_agent_instance,
-                        app_name="cloudinha-agent",
-                        session_service=session_service
-                      )
-                      
-                      async for event in step_runner.run_async(
-                        user_id=user_id,
-                        session_id=session_id,
-                        new_message=current_message
-                      ):
-                          yield event
-                      
-                      # Check Transition
-=======
                  # --- DYNAMIC TOOL WRAPPER ---
                  # We create a fresh instance to ensure clean state if needed, though mostly stateless.
                  from google.adk.agents import LlmAgent
@@ -256,7 +263,6 @@ async def run_workflow(
                  
                  # Check Transition
                  if active_workflow_obj:
->>>>>>> Stashed changes
                       next_step_agent = active_workflow_obj.get_agent_for_user(user_id)
                       
                       if next_step_agent and next_step_agent.name != active_step_agent.name:
@@ -287,10 +293,22 @@ async def run_workflow(
                           print(f"[DEBUG] Stalled in {active_step_agent.name}. Waiting for user.")
                           break
                  else:
-                      # Workflow Object Active but no agent returned?
-                      # Cleanup to avoid infinite loop
-                      updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
-                      break
+                      # Direct Agent (Sisu/Prouni) handling
+                      # Check if they cleared the flag
+                      new_profile = getStudentProfileTool(user_id)
+                      if new_profile.get("active_workflow") != profile_state.get("active_workflow"):
+                           print(f"[DEBUG] Direct Agent {active_step_agent.name} cleared active_workflow.")
+                           # Loop will continue. If None -> Root Agent next turn.
+                      else:
+                           # Workflow/Agent persisted state. End turn.
+                           print(f"[DEBUG] Direct Agent {active_step_agent.name} continuing.")
+                           break
+
+            elif active_workflow_obj:
+                 # Workflow Object Active but no agent returned?
+                 # Cleanup to avoid infinite loop
+                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
+                 break
 
             else:
                  # Root Agent
@@ -307,6 +325,32 @@ async def run_workflow(
                  ):
                     yield event
                  
+                 # --- CHECK FOR STATE CHANGE ---
+                 # If Root Agent triggered a workflow switch (e.g. to "sisu_workflow"), 
+                 # we should NOT break. We should CONTINUE the loop so the specialized agent runs immediately.
+                 
+                 final_profile_state = getStudentProfileTool(user_id)
+                 new_workflow = final_profile_state.get("active_workflow")
+                 old_workflow = profile_state.get("active_workflow")
+                 
+                 if new_workflow != old_workflow and new_workflow is not None:
+                      print(f"[Workflow] Root Agent switched context to '{new_workflow}'. CONTINUING loop.")
+                      # We expect Root Agent to be silent (per instructions), so we just flow into the next agent.
+                      # Force a system trigger for the next agent? 
+                      # Usually the next agent takes the original 'new_message' or we can give it a nudge.
+                      # But let's just let the loop re-evaluate. 
+                      # The next agent will see the user's last message? 
+                      # Ideally we want the next agent to greet or answer.
+                      # Let's inject a "handoff" message to the next agent if needed, or rely on its instructions.
+                      
+                      # To ensure the next agent responds to the *original* query (e.g. "E o Sisu?"), 
+                      # we might need to preserve 'current_message'. 
+                      # 'current_message' is still 'new_message' at this point in the loop structure regarding Root Agent usage.
+                      # So it should be fine.
+                      continue
+                 
+                 break
+
                  break
             
             steps_run += 1

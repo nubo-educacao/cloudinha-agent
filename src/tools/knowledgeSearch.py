@@ -32,6 +32,7 @@ async def knowledgeSearchTool(query: str, collection_name: str = "documents") ->
         return "Erro de configuração: Chave de API do Google não encontrada."
 
     try:
+
         # 1. Generate Embedding (Async)
         print(f"[DEBUG RAG] Generating embedding (Async) using models/embedding-001 for: '{query}'...", flush=True)
         
@@ -91,6 +92,7 @@ async def knowledgeSearchTool(query: str, collection_name: str = "documents") ->
             
         # 3. Compile results
         docs = response_rpc.data
+
         context_text = "\n\n".join([f"--- Contexto ---\n{doc.get('content', '')}" for doc in docs])
         return context_text
         

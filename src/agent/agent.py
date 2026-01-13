@@ -34,11 +34,7 @@ prouni_agent = LlmAgent(
     name="prouni_agent",
     description="Especialista no Programa Universidade para Todos (Prouni). Responde dúvidas sobre bolsas, regras e documentação.",
     instruction=load_instruction_from_file("prouni_agent_instruction.txt"),
-<<<<<<< Updated upstream
-    tools=[knowledgeSearchTool, getImportantDatesTool],
-=======
     tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool],
->>>>>>> Stashed changes
     output_key="prouni_report",
 )
 
@@ -48,11 +44,7 @@ sisu_agent = LlmAgent(
     name="sisu_agent",
     description="Especialista no Sistema de Seleção Unificada (Sisu). Responde dúvidas sobre inscrição, nota de corte e cotas.",
     instruction=load_instruction_from_file("sisu_agent_instruction.txt"),
-<<<<<<< Updated upstream
-    tools=[knowledgeSearchTool, getImportantDatesTool],
-=======
     tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool],
->>>>>>> Stashed changes
     output_key="sisu_report",
 )
 
@@ -79,7 +71,18 @@ import os
 
 # Initialize Supabase Client
 supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
+service_role_key = os.getenv("SUPABASE_SERVICE_KEY")
+anon_key = os.getenv("SUPABASE_KEY")
+
+print(f"[DEBUG KEY] Service Role Key Present: {bool(service_role_key)}")
+print(f"[DEBUG KEY] Anon Key Present: {bool(anon_key)}")
+
+if service_role_key:
+    print("[DEBUG KEY] Using SUPABASE_SERVICE_KEY")
+    supabase_key = service_role_key
+else:
+    print("[DEBUG KEY] Using SUPABASE_KEY (Anon) - WARNING: RLS may block writes")
+    supabase_key = anon_key
 
 if not supabase_url or not supabase_key:
     print("Warning: Supabase credentials not found. Persistence might fail.")
