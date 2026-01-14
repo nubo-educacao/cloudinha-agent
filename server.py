@@ -272,6 +272,23 @@ async def chat_endpoint(request: ChatRequest):
         except Exception as e:
             # Catch-all for top level generator errors
             logger.error(f"Stream Error: {e}")
+            import traceback
+            tb = traceback.format_exc()
+            
+            # Persist error to agent_errors for learning
+            try:
+                from src.agent.agent import supabase_client
+                supabase_client.table('agent_errors').insert({
+                    'user_id': user_id,
+                    'session_id': session_id,
+                    'error_type': 'server_stream_error',
+                    'error_message': str(e),
+                    'stack_trace': tb,
+                    'metadata': {'chat_input': request.chatInput}
+                }).execute()
+            except Exception as store_err:
+                 logger.error(f"Failed to log error to DB: {store_err}")
+
             yield json.dumps({"type": "error", "content": str(e)}) + "\n"
 
     from fastapi.responses import StreamingResponse

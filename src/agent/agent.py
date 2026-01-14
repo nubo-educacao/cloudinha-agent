@@ -5,7 +5,9 @@ from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.logModeration import logModerationTool
 from src.tools.getImportantDates import getImportantDatesTool
+from src.tools.readRulesTool import readRulesTool
 from src.tools.smartResearch import smartResearchTool
+from src.tools.duckDuckGoSearch import duckDuckGoSearchTool
 from .utils import load_instruction_from_file
 
 load_dotenv()
@@ -14,15 +16,7 @@ load_dotenv()
 
 MODEL="gemini-2.0-flash"
 
-# --- Sub Agent 1: Onboarding Agent ---
-onboarding_agent = LlmAgent(
-    model=MODEL,
-    name="onboarding_agent",
-    description="Você é a Cloudinha, uma assistente virtual amigável e acolhedora da Nubo Educação! 🌟",
-    instruction=load_instruction_from_file("onboarding_agent_instruction.txt"),
-    tools=[getStudentProfileTool, updateStudentProfileTool],
-    output_key="onboarding_report",
-)
+
 
 # --- Sub Agent 2: Match Agent (REMOVED - Replaced by Match Workflow)
 # match_agent logic is now handled by src/agent/match_workflow.py triggered by active_workflow state.
@@ -34,7 +28,7 @@ prouni_agent = LlmAgent(
     name="prouni_agent",
     description="Especialista no Programa Universidade para Todos (Prouni). Responde dúvidas sobre bolsas, regras e documentação.",
     instruction=load_instruction_from_file("prouni_agent_instruction.txt"),
-    tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool],
+    tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool, duckDuckGoSearchTool],
     output_key="prouni_report",
 )
 
@@ -44,7 +38,7 @@ sisu_agent = LlmAgent(
     name="sisu_agent",
     description="Especialista no Sistema de Seleção Unificada (Sisu). Responde dúvidas sobre inscrição, nota de corte e cotas.",
     instruction=load_instruction_from_file("sisu_agent_instruction.txt"),
-    tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool],
+    tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool, duckDuckGoSearchTool],
     output_key="sisu_report",
 )
 
@@ -55,7 +49,7 @@ root_agent = LlmAgent(
     instruction=load_instruction_from_file("root_agent_instruction.txt"),
     # sub_agents=[prouni_agent, sisu_agent], # Match agent removed from direct sub-agents
     sub_agents=[prouni_agent, sisu_agent],
-    tools=[logModerationTool, getStudentProfileTool, updateStudentProfileTool]
+    tools=[logModerationTool, getStudentProfileTool, updateStudentProfileTool, readRulesTool]
 )
 
 # --- Root Agent for the Runner ---

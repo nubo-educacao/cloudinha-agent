@@ -1,12 +1,24 @@
 import re
 import json
-from typing import Optional
+from typing import Optional, List, Set, Dict, Union
 from src.lib.supabase import supabase
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
+from src.tools.getStudentProfile import getStudentProfileTool
 
 # Cache for city coordinates to avoid repeated API calls
 _CITY_COORDS_CACHE = {}
+
+# Constants for Income Logic
+SALARIO_MINIMO = 1621.0
+RENDA_INTEGRAL_THRESHOLD = 1.5 * SALARIO_MINIMO  # 2431.50
+RENDA_PARCIAL_THRESHOLD = 3.0 * SALARIO_MINIMO   # 4863.00
+
+TAGS_RENDA = {
+    'INTEGRAL', 'PARCIAL', 
+    'RENDA_ATE_1_SM', 'RENDA_ATE_1_5_SM', 
+    'RENDA_ATE_2_SM', 'RENDA_ATE_4_SM'
+}
 
 def sanitize_search_input(text: str) -> str:
     """
@@ -38,150 +50,317 @@ def get_city_coordinates(city_name: str):
     
     return None
 
+def normalize_shift(shift_value: str) -> str:
+    """Normaliza valores de turno, tratando EAD como equivalente."""
+    if not shift_value:
+        return ""
+    
+    lower = shift_value.lower().strip()
+    
+    # Normalizar EAD
+    if 'ead' in lower or 'distância' in lower or 'distancia' in lower:
+        return 'EAD'
+    
+    # Capitalizar outros turnos
+    shift_map = {
+        'matutino': 'Matutino',
+        'vespertino': 'Vespertino',
+        'noturno': 'Noturno',
+        'integral': 'Integral'
+    }
+    return shift_map.get(lower, shift_value.capitalize())
+
+def get_excluded_tags_by_income(income: float) -> Set[str]:
+    """Retorna tags que devem ser excluídas baseado na renda."""
+    if income is None:
+        return set()
+    
+    excluded = set()
+    
+    if income > RENDA_PARCIAL_THRESHOLD:  # > 3 SM
+        excluded.update(['INTEGRAL', 'PARCIAL', 'RENDA_ATE_1_SM', 
+                        'RENDA_ATE_1_5_SM', 'RENDA_ATE_2_SM'])
+    elif income > RENDA_INTEGRAL_THRESHOLD:  # > 1.5 SM
+        excluded.update(['INTEGRAL', 'RENDA_ATE_1_SM', 'RENDA_ATE_1_5_SM'])
+    elif income > 2 * SALARIO_MINIMO:  # > 2 SM
+        excluded.update(['RENDA_ATE_1_SM', 'RENDA_ATE_1_5_SM', 'RENDA_ATE_2_SM'])
+    elif income > SALARIO_MINIMO:  # > 1 SM
+        excluded.update(['RENDA_ATE_1_SM'])
+    
+    return excluded
+
+def should_exclude_by_income(opp_tags: list, excluded: Set[str]) -> bool:
+    """Verifica se oportunidade deve ser excluída por renda."""
+    if not excluded or not opp_tags:
+        return False
+    
+    # opp_tags é JSONB: [[tag1, tag2], [tag3]]
+    for tag_group in opp_tags:
+        if isinstance(tag_group, list):
+            # Se TODOS os tags importantes do grupo são de renda excluída, exclui o grupo
+            # Mas cuidado: um grupo pode ter [AMPLA, INTEGRAL]. Se excluir INTEGRAL, sobra AMPLA?
+            # A lógica original do Match diz: Tags são cumulativas para a vaga. 
+            # Se a vaga pede (RENDA_ATE_1_SM E PPI), e user tem renda alta -> Exclui.
+            
+            # Simplificação segura: Se o grupo contem ALGUMA tag de renda que o usuario NAO atende
+            # E essa tag é restritiva (exige renda baixa), então esse grupo não serve.
+            # Se a oportunidade só tem grupos inválidos, ela é excluída.
+             
+            # Aqui estamos validando SE a oportunidade deve ser excluída.
+            # Se o grupo tem uma tag Excluída, esse grupo é invalido.
+            pass
+
+    # Simplified Logic: Check if ANY valid group remains.
+    # If all groups are invalid, return True (Exclude).
+    
+    has_valid_group = False
+    for tag_group in opp_tags:
+        if isinstance(tag_group, list):
+            # Check if this group is valid
+            group_is_invalid = any(tag in excluded for tag in tag_group)
+            if not group_is_invalid:
+                has_valid_group = True
+                break
+                
+    return not has_valid_group
+
+def matches_quota_filter(opp_tags: list, user_quotas: List[str]) -> bool:
+    """Verifica se oportunidade atende às cotas do usuário."""
+    if not user_quotas:
+        return True  # Sem filtro explicito de cotas = aceita tudo (ou agente decide)
+        # Note: Se o user não passou cotas, assumimos que ele quer ver tudo ou o RPC já filtrou o básico.
+        # Mas para ser seguro, se user nao tem cotas, ele só deveria ver Ampla? 
+        # Geralmente sim. Mas se o parametro quota_types veio vazio, o RPC traz tudo.
+        # Vamos manter permissivo aqui e deixar o RPC ou o user decidir.
+    
+    # O RPC 'match_opportunities' já faz filtro de inclusão:
+    # (quota_types IS NULL ... OR EXISTS ... (AMPLA OR user_quota))
+    # Então aqui no Python é só double-check se precisarmos.
+    # Mas como o RPC retorna, vamos confiar no RPC para a "Inclusão".
+    return True
+
 def searchOpportunitiesTool(
-    course_name: str,
-    enem_score: float,
+    course_name: Optional[str] = None,
+    enem_score: Optional[float] = None,
+    user_id: str = "user", # Pass user_id to fetch profile fallback
     per_capita_income: Optional[float] = None,
     city_name: Optional[str] = None,
-    shift: Optional[str] = None,
-    institution_type: Optional[str] = None
+    shift: Union[str, List[str], None] = None, # can be str or list
+    institution_type: Optional[str] = None,
+    program_preference: Optional[str] = None,
+    quota_types: Optional[List[str]] = None,
+    user_lat: Optional[float] = None,
+    user_long: Optional[float] = None
 ) -> str:
     """
-    Busca e filtra vagas de Sisu e Prouni no banco de dados. 
-    Se city_name for fornecido, prioriza resultados nesta cidade e tenta calcular proximidade.
+    Busca vagas de Sisu e Prouni usando RPC match_opportunities otimizada.
     """
     
     # 0. Sanitize Inputs
-    course_name = sanitize_search_input(course_name)
-    if not course_name: 
-        # If sanitization removed everything (or it was empty), might want to abort or allow broad search?
-        # For safety, let's proceed with empty, but the LIKE %% might return everything if not careful.
-        # But course_name is required. If empty, return empty.
-        return []
-
+    course_name = sanitize_search_input(course_name) if course_name else ""
     if city_name:
         city_name = sanitize_search_input(city_name)
+
+    # Fallback Geolocation from Profile
+    if user_lat is None or user_long is None:
+        try:
+            profile = getStudentProfileTool(user_id)
+            if profile:
+                # Use profile lat/long if available
+                if profile.get("device_latitude") and profile.get("device_longitude"):
+                    user_lat = float(profile["device_latitude"])
+                    user_long = float(profile["device_longitude"])
+                
+                # Also fallback income/quotas if not provided (optional, enables smarter search)
+                if per_capita_income is None:
+                    per_capita_income = profile.get("per_capita_income")
+                if not quota_types:
+                    quota_types = profile.get("quota_types")
+                    
+        except Exception as e:
+            print(f"[WARN] Failed to fetch profile for fallback: {e}")
+
+    # Normalize Shifts
+    normalized_shifts = []
+    if shift:
+        if isinstance(shift, list):
+            normalized_shifts = [normalize_shift(s) for s in shift if s]
+        else:
+            normalized_shifts = [normalize_shift(str(shift))]
+    
+    # Remove duplicates and empties
+    normalized_shifts = list(set(s for s in normalized_shifts if s))
+
+    # Normalize Program Preference
+    # Use program_preference if provided, otherwise derive from institution_type
+    if not program_preference and institution_type:
+        itype = institution_type.lower()
+        if "púb" in itype or "pub" in itype or "sisu" in itype:
+            program_preference = 'sisu'
+        elif "priv" in itype or "prouni" in itype:
+            program_preference = 'prouni'
+    elif program_preference:
+        program_preference = program_preference.lower()
+        if "sisu" in program_preference:
+            program_preference = "sisu"
+        elif "prouni" in program_preference:
+            program_preference = "prouni"
     
     # 1. Prepare RPC Parameters
-    page_number = 0
-    page_size = 20 # Fetch enough courses to find opportunities
+    page_size = 20
     
-    # Map institution_type to RPC category
-    category = None
-    if institution_type:
-        itype = institution_type.lower()
-        if "púb" in itype or "pub" in itype:
-            category = 'SISU'
-        elif "priv" in itype:
-            category = 'Prouni'
-            
-    # Determine Sort Strategy
-    sort_by = 'relevancia' # Default
-    if city_name:
-        sort_by = 'proximas'
-        
     rpc_params = {
-        "page_number": page_number,
+        "search_text": course_name,
+        "enem_score": float(enem_score) if enem_score else None,
+        "income_per_capita": float(per_capita_income) if per_capita_income is not None else None,
+        "quota_types": quota_types if quota_types else None,
+        "preferred_shifts": normalized_shifts if normalized_shifts else None,
+        "program_preference": program_preference,
+        "user_lat": user_lat,
+        "user_long": user_long,
+        "city_name": city_name,
         "page_size": page_size,
-        "search_query": course_name,
-        "category": category,
-        "sort_by": sort_by,
-        "user_city": city_name,
-        # "user_state": ... # We could accept state if available
+        "page_number": 0 
     }
 
-    print(f"!!! [DEBUG SEARCH] Calling RPC get_courses_with_opportunities with {rpc_params}")
+    print(f"!!! [DEBUG SEARCH] Calling RPC match_opportunities with {rpc_params}")
 
-    response = supabase.rpc("get_courses_with_opportunities", rpc_params).execute()
-    courses = response.data
+    try:
+        response = supabase.rpc("match_opportunities", rpc_params).execute()
+        courses = response.data
+    except Exception as e:
+        error_msg = str(e)
+        if "statement timeout" in error_msg.lower() or "57014" in error_msg:
+             return json.dumps({
+                "summary": "A busca foi muito ampla e excedeu o tempo limite para processar. Por favor, peça para o usuário refinar a busca adicionando um Curso específico, Cidade ou Estado.",
+                "results": []
+            }, ensure_ascii=False)
+        return json.dumps({"error": f"RPC call failed: {str(e)}"}, ensure_ascii=False)
 
     if not courses:
-        return []
+        return json.dumps({
+            "summary": "Não encontrei cursos correspondentes com os filtros atuais.",
+            "results": []
+        }, ensure_ascii=False)
 
     # 2. Process and Filter Results (Python Side)
-    # We want to return a list of Courses (grouped), not flat opportunities.
-    # This matches CourseDisplayData for the frontend.
+    processed_results = []
     
-    grouped_courses = []
-    
-    normalized_shift_filter = str(shift).lower() if shift else None
-    
+    # Pre-calculate excluded tags based on income
+    excluded_tags = get_excluded_tags_by_income(per_capita_income if per_capita_income is not None else None)
+
     for course in courses:
-        # Each course has an 'opportunities' list
-        raw_opps = course.get("opportunities") or []
-        filtered_opps = []
+        raw_opps = course.get("opportunities_json") or []
+        filtered_opps_summary = []
+        
+        # Track metadata for summary
+        shifts_found = set()
+        types_found = set()
+        min_cutoff = 1000.0
         
         for opp in raw_opps:
-            # Filter by Cutoff Score
-            # Only filter if user has a valid score (>0)
-            if enem_score and enem_score > 0:
-                opp_score = opp.get("cutoff_score")
-                if opp_score and opp_score > enem_score:
-                    continue
-                
-            # Filter by Shift
-            if shift:
-                # Normalize `shift` argument to a set of lower-case strings for checking
-                if isinstance(shift, list):
-                    target_shifts = {s.lower() for s in shift if s}
-                elif isinstance(shift, str):
-                    target_shifts = {shift.lower()}
-                else:
-                    target_shifts = set()
+            # Income Exclusion (Final Safety Check)
+            opp_tags = opp.get("concurrency_tags", [])
+            if should_exclude_by_income(opp_tags, excluded_tags):
+                continue
 
-                # Check for indifference
-                is_indifferent = any(x in target_shifts for x in ["indiferente", "tanto faz", "qualquer", "todos"])
-                
-                if not is_indifferent and target_shifts:
-                    opp_shift = str(opp.get("shift", "")).lower()
-                    # Check if ANY of the target shifts matches the opportunity shift
-                    # (e.g. target=['matutino'], opp='Integral' -> No match?)
-                    # Usually stricter match: if target has 'matutino', opp must be 'matutino'.
-                    
-                    match = False
-                    for t in target_shifts:
-                        if t in opp_shift or opp_shift in t:
-                            match = True
-                            break
-                    
-                    if not match:
-                        continue
+            # Shift Filter (Extra safety for "Indifferent" logic if needed, 
+            # though RPC handles explicit lists well. 
+            # If user said "Indiferente", normalized_shifts might be empty -> RPC returns all.
+            # If user said "Noturno", RPC filters.
+            # Just strict check normalized match if provided and not indifferent
+            is_indifferent_shift = any(x.lower() in ['indiferente', 'tanto faz', 'qualquer'] for x in (shift if isinstance(shift, list) else [str(shift or '')]))
+            
+            if normalized_shifts and not is_indifferent_shift:
+                 opp_shift = normalize_shift(opp.get("shift", ""))
+                 # If normalized_shifts is ['EAD'], allowing 'EAD' or 'Curso a distância' (normalized to EAD)
+                 # We already normalized param to RPC, so RPC return should be correct.
+                 # But let's verify if 'shift' came from input to be sure.
+                 if opp_shift not in normalized_shifts:
+                     continue
+            
+            # Add to summary
+            filtered_opps_summary.append(opp)
+            shifts_found.add(opp.get("shift"))
+            types_found.add(opp.get("scholarship_type") or opp.get("opportunity_type"))
+            
+            sc = opp.get("cutoff_score")
+            if sc and sc < min_cutoff:
+                min_cutoff = sc
 
-            # Construct Opportunity Item
-            filtered_opps.append({
-                "id": opp.get("id"),
-                "shift": opp.get("shift"),
-                "scholarship_type": opp.get("scholarship_type"),
-                "opportunity_type": opp.get("opportunity_type"),
-                "cutoff_score": opp.get("cutoff_score"),
-                # Add tags if needed, e.g. from concurrency_tags
-            })
-            
-        # Only add course if it has matching opportunities
-        if filtered_opps:
-            # Map Course Fields to match CourseDisplayData
-            # CourseDisplayData: { id, title, institution, location, logoUrl, opportunities: [...] }
-            # Note: logoUrl is not in DB yet, can be mocked or omitted.
-            
-            grouped_courses.append({
-                "id": course.get("id"),
-                "title": course.get("course_name"),
+        if filtered_opps_summary:
+            # Build Simplified Course Object
+            processed_results.append({
+                "course": course.get("course_name"),
                 "institution": course.get("institution_name"),
-                "location": f"{course.get('city')} - {course.get('state')}",
-                "distance_km": course.get("distance_km"),
-                "opportunities": filtered_opps
+                "location": f"{course.get('campus_city')} - {course.get('campus_state')}" + (f" ({course.get('distance_km'):.1f}km)" if course.get('distance_km') is not None else ""),
+                "opportunities_count": len(filtered_opps_summary),
+                "types": list(types_found),
+                "shifts": list(shifts_found),
+                "best_cutoff": min_cutoff if min_cutoff < 1000 else None,
+                # Keep ID for frontend action if needed, though mostly informational for Agent
+                "course_id": course.get("course_id") 
             })
 
-    # Extract only IDs for the agent/frontend
-    course_ids = [c["id"] for c in grouped_courses]
-    total_found = sum(len(c["opportunities"]) for c in grouped_courses)
+    # --- PERSISTENCE: Save Found IDs to Workflow Data ---
+    try:
+        if processed_results and user_id and user_id != "user":
+            found_ids = [r["course_id"] for r in processed_results if r.get("course_id")]
+            
+            # Fetch current workflow_data to merge (or just update key)
+            # We use a direct update with jsonb functionality if possible, or read-modify-write
+            # Simplified read-modify-write for safety:
+            
+            # We already have a pattern in updateStudentProfile, but let's do a quick one here.
+            # actually, supabase .update() validates?
+            
+            # Let's fetch current prefs first to be safe about preserving other keys?
+            # Or just rely on Supabase merging if we passed a partial JSON? 
+            # Supabase Python client .update() typically replaces the whole column value if it's a JSONB column unless we use special syntax or stored procedure.
+            # So we MUST read first.
+            
+            curr = supabase.table("user_preferences").select("workflow_data").eq("user_id", user_id).execute()
+            current_wf = (curr.data[0].get("workflow_data") if curr.data else {}) or {}
+            
+            current_wf["last_course_ids"] = found_ids
+            current_wf["match_status"] = "reviewing"
+            
+            supabase.table("user_preferences").update({
+                "workflow_data": current_wf
+            }).eq("user_id", user_id).execute()
+            
+            print(f"!!! [SEARCH PERSISTENCE] Saved {len(found_ids)} course IDs to workflow_data.")
+
+    except Exception as e:
+        print(f"!!! [SEARCH PERSISTENCE ERROR] Failed to save IDs: {e}")
+
+    # 3. Create Final Output
+    # Build filter context string
+    active_filters = []
+    if program_preference and program_preference != 'indiferente':
+        active_filters.append(f"Programa: {program_preference.capitalize()}")
+    if normalized_shifts:
+        active_filters.append(f"Turno: {', '.join(normalized_shifts)}")
+    if institution_type and institution_type != 'indiferente':
+        active_filters.append(f"Tipo: {institution_type.capitalize()}")
+    if enem_score:
+        active_filters.append(f"Nota: {enem_score}")
+    if quota_types:
+        active_filters.append("Cotas: Sim")
+        
+    filter_context = f" (Filtros: {', '.join(active_filters)})" if active_filters else ""
+
+    summary_text = f"Encontrei {len(processed_results)} cursos com oportunidades compatíveis"
+    if city_name:
+        summary_text += f" em {city_name}."
+    else:
+        summary_text += "."
     
-    result_payload = {
-        "summary": f"Found {total_found} opportunities in {len(course_ids)} courses.",
-        "total_opportunities": total_found,
-        "total_courses": len(course_ids),
-        "course_ids": course_ids
+    summary_text += filter_context
+        
+    final_payload = {
+        "summary": summary_text,
+        "results": processed_results
     }
 
-    # Return as JSON string
-    return json.dumps(result_payload, ensure_ascii=False)
+    return json.dumps(final_payload, ensure_ascii=False)
