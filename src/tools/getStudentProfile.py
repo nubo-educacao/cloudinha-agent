@@ -33,7 +33,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
     preferences_data = None
     try:
         preferences_response = supabase.table("user_preferences") \
-            .select("enem_score, family_income_per_capita, quota_types, course_interest, location_preference, state_preference, preferred_shifts, university_preference, workflow_data") \
+            .select("enem_score, family_income_per_capita, quota_types, course_interest, location_preference, state_preference, preferred_shifts, university_preference, workflow_data, device_latitude, device_longitude, program_preference") \
             .eq("user_id", user_id) \
             .execute()
             
@@ -48,14 +48,18 @@ def getStudentProfileTool(user_id: str) -> Dict:
     # Prioritize DB flag, fallback to check
     onboarding_completed = False
     if profile_data:
+        # Trust the DB flag if it's explicitly True
         if profile_data.get("onboarding_completed"):
             onboarding_completed = True
         else:
-             # Fallback logic (legacy)
+             # Fallback logic (legacy) - Keep consistent with frontend if needed
+             # But if we rely on the flag, we should rely on the flag.
+             # Let's keep the fallback for older users who might have data but no flag.
              onboarding_completed = bool(
                 profile_data.get("full_name") and 
                 profile_data.get("city") and 
-                profile_data.get("education")
+                profile_data.get("education") and
+                profile_data.get("age") # Added age check for completeness
             )
 
     return {
@@ -75,5 +79,8 @@ def getStudentProfileTool(user_id: str) -> Dict:
         "quota_types": preferences_data.get("quota_types", []) if preferences_data else [],
         "preferred_shifts": preferences_data.get("preferred_shifts", []) if preferences_data else [],
         "university_preference": preferences_data.get("university_preference") if preferences_data else None,
+        "program_preference": preferences_data.get("program_preference") if preferences_data else None,
+        "device_latitude": preferences_data.get("device_latitude") if preferences_data else None,
+        "device_longitude": preferences_data.get("device_longitude") if preferences_data else None,
         "workflow_data": preferences_data.get("workflow_data") if preferences_data else {}
     }

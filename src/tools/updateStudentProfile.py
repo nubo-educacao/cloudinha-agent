@@ -71,12 +71,46 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
 
     if "per_capita_income" in updates:
         preferences_updates["family_income_per_capita"] = updates["per_capita_income"]
+
+    # --- NOVOS CAMPOS ---
+
+    # Program Preference (sisu/prouni/indiferente)
+    if "program_preference" in updates:
+        val = str(updates["program_preference"]).lower()
+        if "sisu" in val:
+            preferences_updates["program_preference"] = "sisu"
+        elif "prouni" in val:
+            preferences_updates["program_preference"] = "prouni"
+        else:
+            preferences_updates["program_preference"] = "indiferente"
+
+    # Quota Types
+    if "quota_types" in updates:
+        val = updates["quota_types"]
+        if isinstance(val, list):
+            preferences_updates["quota_types"] = val
+        elif isinstance(val, str):
+            # Handle comma-separated string
+            preferences_updates["quota_types"] = [v.strip() for v in val.split(",")]
     
     # --- 2. Course Normalization ---
     if "course_interest" in updates:
-        preferences_updates["course_interest"] = updates["course_interest"]
-    if "course_name" in updates:
-        preferences_updates["course_interest"] = updates["course_name"]
+        val = updates["course_interest"]
+        if isinstance(val, str):
+            clean = val.lower().strip()
+            if "não sei" in clean or "indeciso" in clean:
+                preferences_updates["course_interest"] = []
+            else:
+                preferences_updates["course_interest"] = [val]
+        elif isinstance(val, list):
+            preferences_updates["course_interest"] = val
+            
+    if "course_name" in updates: # Legacy
+        val = updates["course_name"]
+        if isinstance(val, str):
+            preferences_updates["course_interest"] = [val]
+        elif isinstance(val, list):
+             preferences_updates["course_interest"] = val
     
     # --- 3. Workflow Data Merge ---
     workflow_keys = ['match_search_confirmed'] 
@@ -103,33 +137,46 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
     if "city_name" in updates:
         preferences_updates["location_preference"] = updates["city_name"]
 
-    # --- 4. Shift Normalization ---
-    if "shift" in updates:
-        val = updates["shift"]
+    # --- 4. Shift Normalization (ATUALIZADO) ---
+    def normalize_shift_value(val: str) -> str:
+        """Normaliza valores de turno."""
+        lower = val.lower().strip()
+        
+        # EAD e variantes
+        if 'EAD' in lower or 'Curso a distância' in lower:
+            return 'EAD'
+        
+        shift_map = {
+            'matutino': 'Matutino',
+            'vespertino': 'Vespertino',
+            'noturno': 'Noturno',
+            'integral': 'Integral'
+        }
+        return shift_map.get(lower, val)
+
+    if "shift" in updates or "preferred_shifts" in updates:
+        val = updates.get("shift") or updates.get("preferred_shifts")
+        
         # Handle "Indiferente"
         is_indifferent = False
         if isinstance(val, str):
             clean = val.lower()
             if "indiferente" in clean or "qualquer" in clean or "tanto faz" in clean:
                 is_indifferent = True
-        elif isinstance(val, list) and len(val) == 1 and isinstance(val[0], str):
-             clean = val[0].lower()
-             if "indiferente" in clean or "qualquer" in clean:
-                 is_indifferent = True
-                 
+        elif isinstance(val, list) and len(val) == 1:
+            clean = str(val[0]).lower()
+            if "indiferente" in clean or "qualquer" in clean:
+                is_indifferent = True
+        
         if is_indifferent:
-            # We treat indifferent as "Null" in logic often, or "All".
-            # Let's map to a comprehensive list to be explicit? Or keep it None?
-            # searchOpportunities tool handles `None` as "don't filter".
-            # But DB column `preferred_shifts` is array. 
-            # Ideally store full list: ['Matutino', 'Vespertino', 'Noturno'] or special value.
-            # Storing None/Empty is safer for "No Preference".
-            preferences_updates["preferred_shifts"] = [] 
+            preferences_updates["preferred_shifts"] = []
         else:
             if isinstance(val, list):
-                preferences_updates["preferred_shifts"] = val
+                preferences_updates["preferred_shifts"] = [
+                    normalize_shift_value(s) for s in val if s
+                ]
             else:
-                 preferences_updates["preferred_shifts"] = [str(val)]
+                preferences_updates["preferred_shifts"] = [normalize_shift_value(str(val))]
 
     # --- 5. Institution Type Normalization ---
     if "institution_type" in updates:
@@ -141,6 +188,16 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
         else:
              # Indiferente/Qualquer -> "indiferente"
              preferences_updates["university_preference"] = "indiferente"
+    
+    # Also accept direct university_preference from agent
+    if "university_preference" in updates and "university_preference" not in preferences_updates:
+        val = str(updates["university_preference"]).lower()
+        if "púb" in val or "pub" in val:
+            preferences_updates["university_preference"] = "publica"
+        elif "priv" in val:
+            preferences_updates["university_preference"] = "privada"
+        else:
+            preferences_updates["university_preference"] = "indiferente"
     
     if preferences_updates:
         # Check existence manually first
@@ -203,11 +260,20 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
         has_shift = bool(shifts)
         has_uni = bool(uni_type)
 
-        print(f"!!! [DEBUG AUTO SEARCH] Checking Flags: Course={has_course} ({c_interest}), Score={has_score} ({score}), Shift={has_shift} ({shifts}), Uni={has_uni} ({uni_type})")
-        print(f"!!! [DEBUG AUTO SEARCH] Full Prefs: {pf}")
+        # Fetch workflow context to gate auto-search
+        try:
+            profile_ctx = supabase.table("user_profiles").select("active_workflow").eq("id", user_id).maybe_single().execute()
+            active_wf = profile_ctx.data.get("active_workflow") if (profile_ctx and profile_ctx.data) else None
+        except:
+            active_wf = None
+        
+        print(f"!!! [DEBUG AUTO SEARCH] Checking Flags: Course={has_course}, Uni={has_uni}, Workflow={active_wf}")
 
-        if has_course:
-            print(f"!!! [AUTO SEARCH] Triggering search with: {c_interest}, {score}, {shifts}, {uni_type}")
+        # Relaxed Condition: Trigger auto-search if ANY preference was updated and we're in match_workflow
+        has_any_filter = has_course or has_uni or has_score or has_shift
+        
+        if has_any_filter and active_wf == "match_workflow":
+            print(f"!!! [AUTO SEARCH] Triggering search with: course={c_interest}, score={score}, shifts={shifts}, uni={uni_type}")
             
             # Map params
             # searchTool expects: course_name, enem_score, per_capita_income, city_name, shift, institution_type
@@ -215,11 +281,27 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
             # Auto-Search
             from src.tools.searchOpportunities import searchOpportunitiesTool
             
+            # searchOpportunitiesTool currently expects a single string for course_name
+            # If we have multiple, we might need to iterate or pick first.
+            # For now, let's pick the first one to unblock Basic Prefs logic.
+            search_course = ""
+            if isinstance(c_interest, list) and len(c_interest) > 0:
+                search_course = c_interest[0]
+            elif isinstance(c_interest, str):
+                search_course = c_interest
+                
             opportunities_json = searchOpportunitiesTool(
-                course_name=c_interest,
-                enem_score=float(score),
-                shift=shifts, # Pass the full list
-                institution_type=uni_type
+                course_name=search_course,
+                enem_score=float(score) if score is not None else 0.0,
+                shift=shifts,
+                institution_type=uni_type,
+                # NOVOS PARÂMETROS:
+                program_preference=pf.get("program_preference"),
+                per_capita_income=pf.get("family_income_per_capita"),
+                quota_types=pf.get("quota_types"),
+                # Passamos lat/long do perfil atualizado
+                user_lat=pf.get("device_latitude"),
+                user_long=pf.get("device_longitude")
             )
             
             # Return these results directly to the agent

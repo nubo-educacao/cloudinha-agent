@@ -27,6 +27,8 @@ def check_authentication(user_id: str) -> bool:
         return False
     return True
 
+from src.agent.retrieval import retrieve_similar_examples
+
 async def run_workflow(
     user_id: str,
     session_id: str,
@@ -45,6 +47,12 @@ async def run_workflow(
         return
 
     # 2. Guardrails Check
+    yield {
+        "type": "tool_start",
+        "tool": "guardrails_check",
+        "args": {}
+    }
+    
     transient_session_service = InMemorySessionService()
 
     await transient_session_service.create_session(
@@ -77,6 +85,12 @@ async def run_workflow(
 
     print(f"[Guardrails] Output: {guardrails_text_buffer}")
     decision_text = guardrails_text_buffer.strip().upper()
+    
+    yield {
+        "type": "tool_end",
+        "tool": "guardrails_check",
+        "output": decision_text
+    }
 
     if "SAFE" in decision_text:
         # 3. Safe -> Router Loop
@@ -88,7 +102,17 @@ async def run_workflow(
         while steps_run < MAX_STEPS:
             # --- ROUTER AGENT (CONTEXT SWITCHING) ---
             # 0. Fetch state at start of iteration
+            yield {
+                "type": "tool_start",
+                "tool": "preload_student_profile",
+                "args": {}
+            }
             profile_state = getStudentProfileTool(user_id)
+            yield {
+                "type": "tool_end",
+                "tool": "preload_student_profile",
+                "output": "Perfil carregado"
+            }
 
             # --- ROUTER AGENT (CONTEXT SWITCHING) ---
             if steps_run == 0:
@@ -161,6 +185,20 @@ async def run_workflow(
                                  
                      except Exception as e:
                          print(f"[Router Error]: {e}")
+                         import traceback
+                         tb = traceback.format_exc()
+                         try:
+                             from src.agent.agent import supabase_client
+                             supabase_client.table('agent_errors').insert({
+                                 'user_id': user_id,
+                                 'session_id': session_id,
+                                 'error_type': 'router_error',
+                                 'error_message': str(e),
+                                 'stack_trace': tb,
+                                 'metadata': {'router_input': router_input_text}
+                             }).execute()
+                         except Exception as log_err:
+                             print(f"Failed to log router error: {log_err}")
             active_workflow_obj = None
             active_step_agent = None
             
@@ -173,6 +211,13 @@ async def run_workflow(
             
             if not profile_state.get("onboarding_completed"):
                  active_workflow_obj = onboarding_workflow
+                 # [FIX] Explicitly set active_workflow for consistency
+                 if profile_state.get("active_workflow") != "onboarding_workflow":
+                     print(f"[Workflow] Explicitly setting active_workflow to 'onboarding_workflow'")
+                     updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "onboarding_workflow"})
+                     # Update local state so we don't loop/re-trigger unnecessarily
+                     profile_state["active_workflow"] = "onboarding_workflow"
+
             elif profile_state.get("active_workflow") == "match_workflow":
                  active_workflow_obj = match_workflow
             elif profile_state.get("active_workflow") == "sisu_workflow":
@@ -220,15 +265,28 @@ async def run_workflow(
                  workflow_name = active_workflow_obj.name if active_workflow_obj else "direct_agent"
                  print(f"[Workflow] User {user_id} in workflow '{workflow_name}' step: {active_step_agent.name}")
                  
-                 # --- DYNAMIC TOOL WRAPPER ---
+                 # --- DYNAMIC TOOL WRAPPER & LEARNING LOOP ---
                  # We create a fresh instance to ensure clean state if needed, though mostly stateless.
                  from google.adk.agents import LlmAgent
+                 
+                 # 1. Retrieve Learning Examples
+                 user_query_text = ""
+                 if new_message.parts and new_message.parts[0].text:
+                     user_query_text = new_message.parts[0].text
+                 
+                 # Map agent to category (simple mapping)
+                 intent_cat = "general"
+                 if "sisu" in active_step_agent.name: intent_cat = "sisu"
+                 elif "prouni" in active_step_agent.name: intent_cat = "prouni"
+                 elif "match" in active_step_agent.name: intent_cat = "match_logic"
+                 
+                 examples = retrieve_similar_examples(user_query_text, intent_cat)
                  
                  step_agent_instance = LlmAgent(
                      model=active_step_agent.model,
                      name=active_step_agent.name,
                      description=active_step_agent.description,
-                     instruction=active_step_agent.instruction,
+                     instruction=active_step_agent.instruction + examples,
                      tools=active_step_agent.tools,
                      output_key=active_step_agent.output_key
                  )
@@ -278,7 +336,10 @@ async def run_workflow(
                           updates = {}
                           if active_workflow_obj.name == "onboarding_workflow":
                               updates["onboarding_completed"] = True
-                              current_message = Content(role="user", parts=[Part(text="(System: Onboarding complete. Answer user original request.)")])
+                              print(f"[Workflow] Onboarding Complete. Breaking loop to allow Client Trigger.")
+                              if updates:
+                                  updateStudentProfileTool(user_id=user_id, updates=updates)
+                              break # Stop here. Let client send the trigger message.
                               
                           elif active_workflow_obj.name == "match_workflow":
                               updates["active_workflow"] = None 
@@ -311,9 +372,28 @@ async def run_workflow(
                  break
 
             else:
-                 # Root Agent
+                 # --- Root Agent (Default) ---
+                 from google.adk.agents import LlmAgent
+                 
+                 # 1. Retrieve Learning Examples for Root
+                 user_query_text = ""
+                 if new_message.parts and new_message.parts[0].text:
+                     user_query_text = new_message.parts[0].text
+                     
+                 examples = retrieve_similar_examples(user_query_text, "general_qa")
+                 
+                 root_instance = LlmAgent(
+                     model=root_agent.model,
+                     name=root_agent.name,
+                     description=root_agent.description,
+                     instruction=root_agent.instruction + examples,
+                     # sub_agents=root_agent.sub_agents, # Removed to avoid ownership conflict (prouni/sisu are global singletons)
+                     tools=root_agent.tools
+                     # output_key defaults to none
+                 )
+
                  root_runner = Runner(
-                    agent=root_agent,
+                    agent=root_instance,
                     app_name="cloudinha-agent",
                     session_service=session_service
                  )

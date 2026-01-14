@@ -21,9 +21,11 @@ class SupabaseSession(Session):
     def _get_active_workflow(self) -> Optional[str]:
         """Helper to fetch current active_workflow from user_profiles."""
         try:
-            res = self.client.table("user_profiles").select("active_workflow").eq("id", self.user_id).maybe_single().execute()
-            if res.data:
-                return res.data.get("active_workflow")
+            # Use limit(1) instead of maybe_single to avoid 406/NoneType issues
+            res = self.client.table("user_profiles").select("active_workflow").eq("id", self.user_id).limit(1).execute()
+            if res and res.data and len(res.data) > 0:
+                print(f"[SupabaseSession] Fetched active_workflow: {res.data[0].get('active_workflow')}")
+                return res.data[0].get("active_workflow")
         except Exception as e:
             print(f"[SupabaseSession] Error determining active workflow: {e}")
         return None
