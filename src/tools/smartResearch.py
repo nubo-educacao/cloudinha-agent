@@ -27,6 +27,8 @@ async def smartResearchTool(query: str, collection_name: str = "documents") -> s
         target_program = "prouni"
     elif "sisu" in query_lower:
         target_program = "sisu"
+    elif "cloudinha" in query_lower or "você" in query_lower or "quem é" in query_lower:
+        target_program = "cloudinha"
         
     if target_program:
         print(f"[SmartResearch] Detectado programa '{target_program}'. Usando Full Context Rules.")
