@@ -161,24 +161,47 @@ def searchOpportunitiesTool(
     if city_name:
         city_name = sanitize_search_input(city_name)
 
-    # Fallback Geolocation from Profile
+    # 1. Fetch Profile and Preferences (Unconditional)
+    try:
+        profile = getStudentProfileTool(user_id)
+    except Exception as e:
+        print(f"[WARN] Failed to fetch profile: {e}")
+        profile = {}
+
+    # 2. Consolidate Location
     if user_lat is None or user_long is None:
-        try:
-            profile = getStudentProfileTool(user_id)
-            if profile:
-                # Use profile lat/long if available
-                if profile.get("device_latitude") and profile.get("device_longitude"):
-                    user_lat = float(profile["device_latitude"])
-                    user_long = float(profile["device_longitude"])
-                
-                # Also fallback income/quotas if not provided (optional, enables smarter search)
-                if per_capita_income is None:
-                    per_capita_income = profile.get("per_capita_income")
-                if not quota_types:
-                    quota_types = profile.get("quota_types")
-                    
-        except Exception as e:
-            print(f"[WARN] Failed to fetch profile for fallback: {e}")
+        if profile.get("device_latitude") and profile.get("device_longitude"):
+            user_lat = float(profile["device_latitude"])
+            user_long = float(profile["device_longitude"])
+            
+    # 3. Consolidate Filters (Fallback to profile if not provided)
+    if per_capita_income is None:
+        per_capita_income = profile.get("per_capita_income")
+    
+    if not quota_types:
+        quota_types = profile.get("quota_types")
+    
+    # 4. Consolidate Course Interests
+    # Get interests from profile
+    profile_interests = profile.get("course_interest") or []
+    
+    # Function allows explicit course_name override/addition
+    course_interests = []
+    if course_name:
+        course_interests.append(sanitize_search_input(course_name))
+    
+    # Add profile interests if available
+    if profile_interests:
+        # profile_interests might be a list or comma-sep string depending on DB? 
+        # The tool returns what the DB has. The DB user_preferences definition says TEXT[].
+        # So it should be a list.
+        if isinstance(profile_interests, list):
+            course_interests.extend(profile_interests)
+        elif isinstance(profile_interests, str):
+             course_interests.append(profile_interests)
+             
+    # Remove duplicates and empties
+    course_interests = list(set(c for c in course_interests if c))
 
     # Normalize Shifts
     normalized_shifts = []
@@ -192,7 +215,6 @@ def searchOpportunitiesTool(
     normalized_shifts = list(set(s for s in normalized_shifts if s))
 
     # Normalize Program Preference
-    # Use program_preference if provided, otherwise derive from institution_type
     if not program_preference and institution_type:
         itype = institution_type.lower()
         if "púb" in itype or "pub" in itype or "sisu" in itype:
@@ -206,11 +228,11 @@ def searchOpportunitiesTool(
         elif "prouni" in program_preference:
             program_preference = "prouni"
     
-    # 1. Prepare RPC Parameters
-    page_size = 20
+    # 5. Prepare RPC Parameters
+    page_size = 145
     
     rpc_params = {
-        "search_text": course_name,
+        "course_interests": course_interests if course_interests else None,
         "enem_score": float(enem_score) if enem_score else None,
         "income_per_capita": float(per_capita_income) if per_capita_income is not None else None,
         "quota_types": quota_types if quota_types else None,
@@ -232,10 +254,17 @@ def searchOpportunitiesTool(
         error_msg = str(e)
         if "statement timeout" in error_msg.lower() or "57014" in error_msg:
              return json.dumps({
-                "summary": "A busca foi muito ampla e excedeu o tempo limite para processar. Por favor, peça para o usuário refinar a busca adicionando um Curso específico, Cidade ou Estado.",
+                "summary": "A busca foi muito ampla e excedeu o tempo limite. Por favor, peça para o usuário refinar a busca adicionando um Curso específico, Cidade ou Estado.",
                 "results": []
             }, ensure_ascii=False)
         return json.dumps({"error": f"RPC call failed: {str(e)}"}, ensure_ascii=False)
+
+    # CHECK OVERFLOW (Strict Requirement: If >= 145, ask for refinement)
+    if courses and len(courses) >= 145:
+        return json.dumps({
+            "summary": "Encontrei muitos resultados (mais de 144). A busca está muito ampla. Por favor, peça para o usuário adicionar mais critérios (Ex: Curso específico, Cidade, Estado ou Instituição).",
+            "results": []
+        }, ensure_ascii=False)
 
     if not courses:
         return json.dumps({
@@ -248,6 +277,8 @@ def searchOpportunitiesTool(
     
     # Pre-calculate excluded tags based on income
     excluded_tags = get_excluded_tags_by_income(per_capita_income if per_capita_income is not None else None)
+
+    total_opportunities_count = 0
 
     for course in courses:
         raw_opps = course.get("opportunities_json") or []
@@ -264,18 +295,11 @@ def searchOpportunitiesTool(
             if should_exclude_by_income(opp_tags, excluded_tags):
                 continue
 
-            # Shift Filter (Extra safety for "Indifferent" logic if needed, 
-            # though RPC handles explicit lists well. 
-            # If user said "Indiferente", normalized_shifts might be empty -> RPC returns all.
-            # If user said "Noturno", RPC filters.
-            # Just strict check normalized match if provided and not indifferent
+            # Shift Filter
             is_indifferent_shift = any(x.lower() in ['indiferente', 'tanto faz', 'qualquer'] for x in (shift if isinstance(shift, list) else [str(shift or '')]))
             
             if normalized_shifts and not is_indifferent_shift:
                  opp_shift = normalize_shift(opp.get("shift", ""))
-                 # If normalized_shifts is ['EAD'], allowing 'EAD' or 'Curso a distância' (normalized to EAD)
-                 # We already normalized param to RPC, so RPC return should be correct.
-                 # But let's verify if 'shift' came from input to be sure.
                  if opp_shift not in normalized_shifts:
                      continue
             
@@ -289,7 +313,8 @@ def searchOpportunitiesTool(
                 min_cutoff = sc
 
         if filtered_opps_summary:
-            # Build Simplified Course Object
+            total_opportunities_count += len(filtered_opps_summary)
+            # Build Output Object (Needed only for persist logic, not for LLM return now)
             processed_results.append({
                 "course": course.get("course_name"),
                 "institution": course.get("institution_name"),
@@ -298,26 +323,14 @@ def searchOpportunitiesTool(
                 "types": list(types_found),
                 "shifts": list(shifts_found),
                 "best_cutoff": min_cutoff if min_cutoff < 1000 else None,
-                # Keep ID for frontend action if needed, though mostly informational for Agent
                 "course_id": course.get("course_id") 
             })
 
     # --- PERSISTENCE: Save Found IDs to Workflow Data ---
     try:
-        if processed_results and user_id and user_id != "user":
+        # Save even if list is empty (clears formatted results)
+        if user_id and user_id != "user":
             found_ids = [r["course_id"] for r in processed_results if r.get("course_id")]
-            
-            # Fetch current workflow_data to merge (or just update key)
-            # We use a direct update with jsonb functionality if possible, or read-modify-write
-            # Simplified read-modify-write for safety:
-            
-            # We already have a pattern in updateStudentProfile, but let's do a quick one here.
-            # actually, supabase .update() validates?
-            
-            # Let's fetch current prefs first to be safe about preserving other keys?
-            # Or just rely on Supabase merging if we passed a partial JSON? 
-            # Supabase Python client .update() typically replaces the whole column value if it's a JSONB column unless we use special syntax or stored procedure.
-            # So we MUST read first.
             
             curr = supabase.table("user_preferences").select("workflow_data").eq("user_id", user_id).execute()
             current_wf = (curr.data[0].get("workflow_data") if curr.data else {}) or {}
@@ -334,33 +347,25 @@ def searchOpportunitiesTool(
     except Exception as e:
         print(f"!!! [SEARCH PERSISTENCE ERROR] Failed to save IDs: {e}")
 
-    # 3. Create Final Output
-    # Build filter context string
-    active_filters = []
-    if program_preference and program_preference != 'indiferente':
-        active_filters.append(f"Programa: {program_preference.capitalize()}")
-    if normalized_shifts:
-        active_filters.append(f"Turno: {', '.join(normalized_shifts)}")
-    if institution_type and institution_type != 'indiferente':
-        active_filters.append(f"Tipo: {institution_type.capitalize()}")
-    if enem_score:
-        active_filters.append(f"Nota: {enem_score}")
-    if quota_types:
-        active_filters.append("Cotas: Sim")
-        
-    filter_context = f" (Filtros: {', '.join(active_filters)})" if active_filters else ""
-
-    summary_text = f"Encontrei {len(processed_results)} cursos com oportunidades compatíveis"
-    if city_name:
-        summary_text += f" em {city_name}."
-    else:
-        summary_text += "."
+    # 3. Create Final Output (CONCISE for Agent)
+    # Return ONLY the count summary. No results list to save tokens.
     
-    summary_text += filter_context
+    courses_count = len(processed_results)
+    
+    if courses_count == 0:
+         return json.dumps({
+            "summary": "Após a filtragem detalhada, não encontrei cursos compatíveis.",
+            "results": []
+        }, ensure_ascii=False)
+
+    summary_text = (
+        f"Encontrei {courses_count} cursos e um total de {total_opportunities_count} oportunidades nas quais você se encaixa. "
+        "Os detalhes estão disponíveis no painel ao lado."
+    )
         
     final_payload = {
         "summary": summary_text,
-        "results": processed_results
+        "results": [] # Empty results for LLM context optimization
     }
 
     return json.dumps(final_payload, ensure_ascii=False)

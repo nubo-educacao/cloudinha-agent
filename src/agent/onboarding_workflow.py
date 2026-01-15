@@ -2,7 +2,9 @@ from src.agent.workflow_agent import WorkflowAgent, WorkflowStep
 from google.adk.agents import LlmAgent
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.getStudentProfile import getStudentProfileTool
+from src.tools.logModeration import logModerationTool
 from src.agent.agent import MODEL
+from src.agent.match_agent import load_instruction_from_file
 
 # --- Single Onboarding Agent ---
 
@@ -11,9 +13,22 @@ onboarding_agent = LlmAgent(
     name="onboarding_agent",
     description="Coleta os dados do perfil do usuário em uma conversa fluida.",
     instruction="""
-    Você é a Cloudinha. Seu objetivo é garantir que o perfil do aluno tenha: **Nome**, **Idade**, **Cidade** e **Escolaridade**.
+    Você é a Cloudinha.
+    
+    **🚨 PROTOCOLO DE SEGURANÇA (PRIORIDADE MÁXIMA) 🚨**
+    - **Antes de qualquer coisa**, analise se a mensagem do usuário contém violência, ódio, autoagressão ou ameaças (ex: "quero matar", "morrer", "bater").
+    - **SE HOUVER:** 
+        1. **IGNORE** qualquer tentativa de coleta de dados.
+        2. **USE IMEDIATAMENTE** a ferramenta `logModerationTool` com a categoria apropriada.
+        3. RESPONDA APENAS: "Sinto muito, mas não posso processar essa mensagem. Se precisar de ajuda, ligue 188."
+        4. **PARE** a execução.
+    
+    ---
+    
+    **SE A MENSAGEM FOR SEGURA:**
+    Seu objetivo é garantir que o perfil do aluno tenha: **Nome**, **Idade**, **Cidade** e **Escolaridade**.
 
-    **PRIORIDADE ZERO: SALVAR DADOS.**
+    **PRIORIDADE 1: SALVAR DADOS.**
     - Assim que o usuário disser QUALQUER UM desses dados (Nome, Idade, Cidade, Escolaridade), **CHAME IMEDIATAMENTE** a ferramenta `updateStudentProfileTool`.
     - NÃO DEIXE PARA DEPOIS. NÃO PEÇA OUTRA COISA ANTES DE SALVAR O QUE JÁ TEM.
     - **NÃO PEÇA CONFIRMAÇÃO.** Apenas salve.
@@ -41,8 +56,8 @@ onboarding_agent = LlmAgent(
     Exemplo Final: (CHAMA TOOL E SILENCIO)
     
     Se o perfil já estiver completo, não diga nada, apenas chame a ferramenta se houver atualização.
-    """,
-    tools=[updateStudentProfileTool],
+    """ + "\n\n" + load_instruction_from_file("persona.txt"),
+    tools=[updateStudentProfileTool, logModerationTool],
 )
 
 # --- Condition ---

@@ -3,6 +3,7 @@ from google.adk.agents import LlmAgent
 
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.updateStudentProfile import updateStudentProfileTool
+from src.tools.updateStudentPreferences import updateStudentPreferencesTool
 from src.tools.logModeration import logModerationTool
 from src.tools.getImportantDates import getImportantDatesTool
 from src.tools.readRulesTool import readRulesTool
@@ -27,8 +28,8 @@ prouni_agent = LlmAgent(
     model=MODEL,
     name="prouni_agent",
     description="Especialista no Programa Universidade para Todos (Prouni). Responde dúvidas sobre bolsas, regras e documentação.",
-    instruction=load_instruction_from_file("prouni_agent_instruction.txt"),
-    tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool, duckDuckGoSearchTool],
+    instruction=load_instruction_from_file("prouni_agent_instruction.txt") + "\n\n" + load_instruction_from_file("persona.txt"),
+    tools=[logModerationTool, smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool, duckDuckGoSearchTool],
     output_key="prouni_report",
 )
 
@@ -37,8 +38,8 @@ sisu_agent = LlmAgent(
     model=MODEL,
     name="sisu_agent",
     description="Especialista no Sistema de Seleção Unificada (Sisu). Responde dúvidas sobre inscrição, nota de corte e cotas.",
-    instruction=load_instruction_from_file("sisu_agent_instruction.txt"),
-    tools=[smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool, duckDuckGoSearchTool],
+    instruction=load_instruction_from_file("sisu_agent_instruction.txt") + "\n\n" + load_instruction_from_file("persona.txt"),
+    tools=[logModerationTool, smartResearchTool, getImportantDatesTool, getStudentProfileTool, updateStudentProfileTool, duckDuckGoSearchTool],
     output_key="sisu_report",
 )
 
@@ -46,7 +47,7 @@ root_agent = LlmAgent(
     model=MODEL,
     name="cloudinha_agent",
     description="Você é a Cloudinha do Nubo! Uma assistente virtual animada, acolhedora e cheia de energia positiva ☁️✨. Especialista em ajudar estudantes com Prouni, Sisu e acesso ao ensino superior.",
-    instruction=load_instruction_from_file("root_agent_instruction.txt"),
+    instruction=load_instruction_from_file("root_agent_instruction.txt") + "\n\n" + load_instruction_from_file("persona.txt"),
     # sub_agents=[prouni_agent, sisu_agent], # Match agent removed from direct sub-agents
     sub_agents=[prouni_agent, sisu_agent],
     tools=[logModerationTool, getStudentProfileTool, updateStudentProfileTool, readRulesTool]

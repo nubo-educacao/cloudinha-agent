@@ -27,12 +27,12 @@ class WorkflowAgent:
         self.get_state_fn = get_state_fn
         self.on_complete_agent = on_complete_agent
 
-    def get_agent_for_user(self, user_id: str) -> Optional[Agent]:
+    def get_agent_for_user(self, user_id: str, current_state: Optional[Dict[str, Any]] = None) -> Optional[Agent]:
         """
         Determines the correct agent for the user based on their workflow state.
         Returns None if workflow is complete and no on_complete_agent is set.
         """
-        state = self.get_state_fn(user_id)
+        state = current_state if current_state else self.get_state_fn(user_id)
         
         for step in self.steps:
             if not step.condition(state):
