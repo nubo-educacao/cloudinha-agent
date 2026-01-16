@@ -168,9 +168,7 @@ class SupabaseSessionService(BaseSessionService):
         if not user_id:
              user_id = session_id 
         
-        # --- DEBUG ALIAS ---
-        if user_id == "user":
-            user_id = "dac47479-079f-4878-bb43-009e4879fa8b" 
+
         
         # Pydantic initialization
         session = SupabaseSession(id=session_id, appName=app_name, user_id=user_id)

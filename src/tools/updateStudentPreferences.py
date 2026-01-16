@@ -14,10 +14,7 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
                  'university_preference', 'program_preference', 'quota_types', 'per_capita_income'.
     """
     
-    # --- DEBUG ALIAS ---
-    if user_id == "user":
-        user_id = "dac47479-079f-4878-bb43-009e4879fa8b"
-        print(f"!!! [DEBUG PREFS] Aliased 'user' to {user_id}")
+
 
     print(f"!!! [DEBUG TOOL] updateStudentPreferencesTool CALLED with user_id={user_id}, updates={updates}")
     
@@ -84,7 +81,7 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         if isinstance(val, str):
             preferences_updates["course_interest"] = [val]
         elif isinstance(val, list):
-             preferences_updates["course_interest"] = val
+            preferences_updates["course_interest"] = val
     
     # --- 3. Workflow Data Merge (Match Specifics) ---
     workflow_keys = ['match_search_confirmed'] 
@@ -224,6 +221,7 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
                 search_course = c_interest
                 
             opportunities_json = searchOpportunitiesTool(
+                user_id=user_id,
                 course_name=search_course,
                 enem_score=float(score) if score is not None else 0.0,
                 shift=shifts,
@@ -232,7 +230,8 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
                 per_capita_income=pf.get("family_income_per_capita"),
                 quota_types=pf.get("quota_types"),
                 user_lat=pf.get("device_latitude"),
-                user_long=pf.get("device_longitude")
+                user_long=pf.get("device_longitude"),
+                city_name=pf.get("location_preference")
             )
             
             try:
