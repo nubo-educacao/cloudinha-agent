@@ -125,8 +125,9 @@ async def chat_endpoint(request: ChatRequest):
                 return
 
             # 2. Run Workflow
-            context_header = f"context_user_id={user_id}\n---\n"
-            new_message = Content(parts=[Part(text=context_header + request.chatInput)])
+            # [FIX] Removed context_header injection to avoid confusing the model with "User: context_user_id=..."
+            # The user_id is now injected via the System Instruction in workflow.py
+            new_message = Content(parts=[Part(text=request.chatInput)])
 
             full_response_text = ""
             

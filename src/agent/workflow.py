@@ -241,7 +241,7 @@ async def run_workflow(
                     model=active_step_agent.model,
                     name=active_step_agent.name,
                     description=active_step_agent.description,
-                    instruction=active_step_agent.instruction + examples,
+                    instruction=f"USER_ID_CONTEXT: {user_id}\n" + active_step_agent.instruction + examples,
                     tools=active_step_agent.tools,
                     output_key=active_step_agent.output_key
                 )
@@ -342,7 +342,7 @@ async def run_workflow(
                     model=root_agent.model,
                     name=root_agent.name,
                     description=root_agent.description,
-                    instruction=root_agent.instruction + examples,
+                    instruction=f"USER_ID_CONTEXT: {user_id}\n" + root_agent.instruction + examples,
                     # sub_agents=root_agent.sub_agents, # Removed to avoid ownership conflict (prouni/sisu are global singletons)
                     tools=root_agent.tools
                     # output_key defaults to none
