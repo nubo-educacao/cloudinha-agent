@@ -7,6 +7,8 @@ RULES_CONTEXT_DIR = "rules_context"
 def readRulesTool(program: str = None):
     """
     Reads the full text of official rules and documentation for a specific topic (Prouni, Sisu, Cloudinha).
+
+    IMPORTANT: Use this tool with program='cloudinha' whenever the user asks about how the bot works, its architecture, or who created it.
     
     Args:
         program (str): The topic to retrieve rules for. Must be 'prouni', 'sisu', or 'cloudinha'. Case insensitive.
@@ -20,7 +22,8 @@ def readRulesTool(program: str = None):
     program_lower = program.lower().strip()
     
     # Base Knowledge Directory
-    base_knowledge_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "knowledge")
+    # Adjusted to point to src/agent/knowledge
+    base_knowledge_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "agent", "knowledge")
     target_dir = os.path.join(base_knowledge_dir, program_lower)
     
     if not os.path.exists(target_dir):

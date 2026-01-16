@@ -9,7 +9,7 @@ supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
 
 supabase = create_client(supabase_url, supabase_key)
 
-user_id = "dac47479-079f-4878-bb43-009e4879fa8b"
+user_id = "PLACEHOLDER_USER_ID" # Replace with actual user_id for testing
 
 with open("debug_output.txt", "w") as f:
     f.write(f"--- Checking Profile for {user_id} ---\n")

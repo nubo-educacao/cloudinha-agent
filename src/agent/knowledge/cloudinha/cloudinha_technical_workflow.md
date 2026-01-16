@@ -1,6 +1,6 @@
 # Documentação Técnica: Fluxo do Cloudinha Agent
 
-Este documento descreve o funcionamento técnico detalhado do `cloudinha-agent`, desde o recebimento de uma mensagem até a geração da resposta. A arquitetura é baseada no Google ADK (Agent Development Kit) e utiliza um padrão de orquestração de workflows.
+Este documento descreve o funcionamento técnico detalhado do `cloudinha-agent`, desde o recebimento de uma mensagem até a geração da resposta. A arquitetura é baseada no Google ADK (Agent Development Kit) e utiliza um padrão de orquestração de workflows e agentes especialistas.
 
 ## 1. Ciclo de Vida da Requisição (Flow Overview)
 
@@ -8,10 +8,10 @@ O fluxo principal acontece da seguinte forma:
 
 1.  **Entrada (API)**: O servidor recebe um POST em `/chat`.
 2.  **Processamento (Server)**: Validação de sessão e usuário.
-3.  **Orquestração (Agent Loop)**: O `run_workflow` gerencia o estado e roteia para o agente correto.
+3.  **Orquestração (Agent Loop)**: O `run_workflow` gerencia o estado e roteia para o agente ou workflow correto.
 4.  **Streaming (Real-Time)**: O servidor inicia uma `StreamingResponse` (NDJSON) imediatamente.
-5.  **Execução (Sub-Agents)**: Conforme o agente "pensa" ou usa ferramentas, eventos (`tool_start`, `tool_end`, `text`) são enviados ao cliente em tempo real.
-6.  **Saída**: O Frontend cosome o stream para exibir o feedback visual ("Processando...") e o texto progressivamente.
+5.  **Execução (Agents)**: Conforme o agente "pensa" ou usa ferramentas, eventos (`tool_start`, `tool_end`, `text`) são enviados ao cliente em tempo real.
+6.  **Saída**: O Frontend consome o stream para exibir o feedback visual ("Processando...") e o texto progressivamente.
 
 ---
 
@@ -26,95 +26,70 @@ O fluxo principal acontece da seguinte forma:
         *   `{"type": "tool_start", "tool": "nome_tool", ...}`
         *   `{"type": "tool_end", "tool": "nome_tool", "output": "..."}`
         *   `{"type": "text", "content": "parte do texto..."}`
-*   **Validação**: Same as before.
-*   **Resiliência**:
-    *   A conexão mantida aberta (Keep-Alive) evita timeouts em requisições longas de RAG/Pensamento.
-    *   Erros são retornados como evento `{"type": "error"}` dentro do stream.
+*   **Validação**: Verifica se o usuário está autenticado e se a sessão é válida.
 *   **Trigger**: Inicia o generator que itera sobre `run_workflow`.
 
 ### 2.2. Orquestração: `src/agent/workflow.py`
-Esta é a "máquina central" do agente. Ela não é um LLM, mas um loop de controle em Python.
+Esta é a "máquina central" do agente. É um loop de controle em Python que decide qual agente ou workflow deve processar a mensagem.
 
 **Etapas do Loop:**
 
 1.  **Autenticação**:
     *   Se não logado -> Retorna mensagem de bloqueio imediatamente.
 
-2.  **Guardrails (Segurança)**:
-    *   Cria uma sessão transiente `guardrails-check`.
-    *   Executa o `guardrails_agent` para analisar o input.
-    *   Se classificado como `UNSAFE` -> Retorna mensagem de bloqueio e encerra.
-    *   Se `SAFE` -> Prossegue.
-
-3.  **Roteamento (Main Loop)**:
+2.  **Roteamento (Main Loop)**:
     *   O sistema verifica o estado do usuário via `getStudentProfileTool`.
-    *   **Passo 0: Context Switching (RouterAgent)**:
-        *   Um `RouterAgent` (leve, flash model) analisa a mensagem antes de qualquer decisão.
-        *   Se detectar mudança de assunto (ex: está no Match mas perguntou de Sisu), ele altera o `active_workflow` no banco **e na memória da execução atual** IMEDIATAMENTE (mitigando latência de banco).
-        *   Se detectar comando de saída ("Sair"), ele limpa o `active_workflow`.
+    *   **Context Switching (RouterAgent)** (Passo 0):
+        *   Um `RouterAgent` (modelo flash, ultra-rápido) analisa a mensagem antes de qualquer decisão.
+        *   Se detectar mudança de intenção (ex: está no Match mas perguntou datas do Sisu), ele altera o `active_workflow` no banco **e na memória da execução atual** IMEDIATAMENTE.
+        *   Se detectar comando de saída ("Sair", "Menu"), ele limpa o `active_workflow`.
+    
     *   **Prioridade de Roteamento (Pós-Router)**:
-        1.  **Onboarding**: Se `onboarding_completed` == False -> Ativa `onboarding_workflow`.
-        2.  **Match**: Se `active_workflow` == "match_workflow" -> Ativa `match_workflow`.
+        1.  **Onboarding**: Se `onboarding_completed` == False -> Ativa `onboarding_workflow` (Máquina de Estados).
+        2.  **Match**: Se `active_workflow` == "match_workflow" -> Ativa `match_agent` (Agente Especialista).
         3.  **Specialized Agents**: 
             *   Se `active_workflow` == "sisu_workflow" -> Ativa `sisu_agent`.
             *   Se `active_workflow` == "prouni_workflow" -> Ativa `prouni_agent`.
-        4.  **Default**: Se nenhum anterior -> Ativa `root_agent`.
+        4.  **Default**: Se nenhum anterior -> Ativa `root_agent` (Generalista).
 
-4.  **Context Isolation**:
-    *   O `workflow.py` atualiza a tag `active_workflow` na sessão do banco de dados antes de processar a mensagem. Isso garante que o histórico de chat seja "particionado" ou tagueado corretamente para análises futuras.
+3.  **Aprendizado e Contexto (Dynamic Few-Shotting)**:
+    *   Antes de invocar o agente selecionado, o sistema busca exemplos de conversas "ideais" no banco vetorial (`retrieve_similar_examples`).
+    *   Esses exemplos são injetados dinamicamente no prompt do sistema, permitindo que o agente aprenda novas regras ou melhore o tom de voz sem alteração de código.
 
-### 2.3. Workflows (Máquinas de Estado)
-
-Diferente de agentes puramente conversacionais, os Workflows (`WorkflowAgent`) impõem uma sequência rígida de passos.
+### 2.3. Workflows e Agentes
 
 #### A. Onboarding Workflow (`src/agent/onboarding_workflow.py`)
 Objetivo: Preencher o perfil inicial do aluno de forma fluida.
-*   **Lógica**: Agente único (`onboarding_agent`) com conversação dinâmica ("Loose Mode").
+*   **Tipo**: Máquina de Estado com Agente (`WorkflowAgent`).
 *   **Comportamento**:
-    *   Verifica o estado atual do perfil (`get_profile_state`).
-    *   Identifica campos faltantes: **Nome**, **Idade**, **Cidade**, **Escolaridade**.
-    *   Pergunta apenas o que falta, aceitando múltiplos dados em uma única mensagem.
+    *   Verifica campos faltantes obrigatórios: **Nome**, **Idade**, **Cidade**, **Escolaridade**.
+    *   Pergunta apenas o que falta.
     *   Persiste dados via `updateStudentProfileTool`.
-*   **Conclusão**: A função de condição `check_profile_complete` monitora se os 4 campos obrigatórios foram preenchidos para finalizar o workflow (`onboarding_completed = True`).
+*   **Conclusão**: Ao preencher todos os campos, marca `onboarding_completed = True`.
 
-#### B. Match Workflow (`src/agent/match_workflow.py`)
-Objetivo: Encontrar oportunidades de bolsa com alta precisão.
-*   **Lógica**: Coleta preferências refinadas, verifica elegibilidade financeira e expande opções geograficamente.
-*   **Passos**:
-    1.  **Basic Prefs (Smart Step)**: 
-        *   Coleta 4 pontos de dados: **Curso**, **Nota ENEM**, **Turno Preferido** (Mat/Vesp/Not/Int) e **Tipo de Instituição** (Pública/Privada).
-        *   Tenta extrair tudo da primeira mensagem, perguntando apenas o que faltar.
-        *   Executa `searchOpportunitiesTool` com os filtros iniciais.
-    2.  **Socioeconomic (Income Calculator)**: 
-        *   Instrui o usuário a usar o componente de UI `IncomeCalculator` (via Client-Side Tool ou Tag).
-        *   Recebe `income_per_capita`.
-        *   Calcula elegibilidade (Prouni Integral <= 1.5 SM, Parcial <= 3.0 SM, Sisu > 3.0 SM).
-        *   Filtra buscas subsequentes baseado na elegibilidade.
-    3.  **Refinement (Geo & Quality)**: 
-        *   **Geografia**: Verifica flexibilidade para outras cidades/regiões próximas.
-        *   **Qualidade**: Ordena resultados finais priorizando qualidade MEC (`sort_by='quality'`).
-*   **Conclusão**: Define `active_workflow = None` para retornar ao Root Agent.
+#### B. Match Agent (`src/agent/match_agent.py`)
+Objetivo: Encontrar oportunidades de bolsa com alta precisão através de conversação natural.
+*   **Tipo**: Agente Especialista (`LlmAgent`).
+*   **Estado**: Ativado quando `active_workflow` é "match_workflow".
+*   **Input**: Utiliza `updateStudentPreferencesTool` para capturar **Curso**, **Nota**, **Localização**, **Renda**, etc.
+*   **Lógica**:
+    *   Não segue um script rígido ("hardcoded steps").
+    *   O agente decide quais perguntas fazer com base nas preferências que ainda faltam ou precisam de refinamento.
+    *   Usa `suggestRefinementTool` para ajudar o usuário se a busca for muito ampla ou vazia.
+    *   Usa `searchOpportunitiesTool` para buscar vagas reais no banco de dados.
+    *   Usa `logModerationTool` para garantir segurança.
 
-### 2.4. Agentes Especialistas
-
-#### Root Agent (`root_agent`)
-*   **Papel**: Roteador conversacional e "chit-chat".
-*   **Comportamento**: Analisa a intenção livre do usuário. Se o usuário pedir algo específico (ex: "Quero ajuda com o Sisu"), o Root Agent pode usar `updateStudentProfileTool` para setar `active_workflow="sisu_workflow"`.
-*   **Efeito**: Na próxima iteração do loop (ou continuidade imediata), o `workflow.py` detectará a mudança e passará a bola para o agente especialista.
-
-#### Sisu / Prouni Agents
-*   **Papel**: Tira-dúvidas (RAG).
+#### C. Agentes de Conhecimento (Sisu / Prouni)
+*   **Papel**: Tira-dúvidas baseados em documentos oficiais (RAG).
 *   **Ferramentas**:
-    *   `getImportantDatesTool`: Consulta datas do calendário (PRIORIDADE 1).
-    *   `knowledgeSearchTool`: Busca na base vetorial de documentos (PRIORIDADE 2).
-    *   `duckDuckGoSearchTool`: Busca na Web como fallback (PRIORIDADE 3).
-    *   **Lógica de "Tool Cascade"**: O agente é instruído a seguir estritamente essa ordem de prioridade para evitar alucinações. Se a base interna não tiver a resposta, ele recorre à internet.
+    *   `getImportantDatesTool`: Consulta datas do calendário.
+    *   `readRulesTool`: Lê os arquivos de regras atualizados (`regras_sisu.md`, etc).
+    *   `smartResearchTool`: Busca semântica avançada nos documentos processados.
+    *   `duckDuckGoSearchTool`: Fallback para informações de última hora na web.
 
-#### Router Agent (`src/agent/router_agent.py`)
-*   **Papel**: Classificador de Intenção.
-*   **Input**: Mensagem do Usuário + Estado Atual.
-*   **Output**: JSON `{intent: "CHANGE_WORKFLOW", target: "sisu_workflow"}`.
-*   **Diferencial**: Detecta mudanças implícitas de contexto (perguntas fora do escopo atual) e explícitas (comandos de saída).
+#### D. Root Agent (`root_agent`)
+*   **Papel**: Roteador conversacional, "chit-chat" e porta de entrada.
+*   **Comportamento**: Acolhe o usuário. Se o usuário pedir algo específico, usa `updateStudentProfileTool` para setar o workflow correto, passando a bola para o especialista.
 
 ---
 
@@ -122,62 +97,32 @@ Objetivo: Encontrar oportunidades de bolsa com alta precisão.
 
 As ferramentas conectam o agente ao mundo exterior (Banco de Dados, APIs). Todas estão em `src/tools/`.
 
-> **Nota de UX**: A execução de cada ferramenta emite um evento `tool_start` e `tool_end`. No Frontend, isso é renderizado como um indicador de progresso ("Consultando seu perfil...", "Buscando datas..."), aumentando a transparência para o usuário.
-
-| Tool | Função | Inputs | Side Effects |
-| :--- | :--- | :--- | :--- |
-| **`updateStudentProfileTool`** | Atualiza dados do usuário | `user_id` (str), `updates` (dict) | Escreve na tabela `user_profiles`. |
-| **`getStudentProfileTool`** | Lê dados do usuário | `user_id` (str) | N/A (Leitura). Use para decidir roteamento. |
-| **`searchOpportunitiesTool`** | Busca vagas/bolsas | `query` (str), `filters` (dict: cidade, nota, renda, turno, tipo_inst), `sort_by` (quality) | N/A (Leitura no DB `opportunities`). Inclui sanitização de input contra SQL Injection. |
-| **`knowledgeSearchTool`** | RAG (Busca semântica) | `query` (str), `collection` (prouni/sisu) | Embeds query (Async via `google-genai`) e busca na tabela `documents`. |
-| **`getImportantDatesTool`** | Calendário | N/A | Lê CSV `important_dates.csv` da memória/disco. |
-| **`duckDuckGoSearchTool`** | Busca Web | `query` (str) | Realiza busca no DuckDuckGo (backend `api`) para fallback. |
-| **`logModerationTool`** | Segurança | `user_id`, `reason`, `message` | Insere registro na tabela `moderation_logs`. |
+| Tool | Função | Side Effects |
+| :--- | :--- | :--- |
+| **`updateStudentProfileTool`** | Atualiza dados cadastrais (nome, idade) e flags de estado do usuário. | Escreve em `user_profiles`. |
+| **`getStudentProfileTool`** | Lê dados do usuário e estado atual. | Leitura. |
+| **`updateStudentPreferencesTool`** | Atualiza preferências de busca (curso, nota, filtros). Gatilha busca automática se necessário. | Escreve em `user_preferences`. |
+| **`searchOpportunitiesTool`** | Busca vagas/bolsas no catálogo. | Leitura em `opportunities`. |
+| **`suggestRefinementTool`** | Sugere melhorias na busca (ex: nota de corte próxima). | - |
+| **`readRulesTool`** | Lê arquivos markdown de regras/conhecimento. | Leitura FS. |
+| **`logModerationTool`** | Registra violações de segurança ou toxicidade. | Escreve em `moderation_logs`. |
+| **`getImportantDatesTool`** | Consulta cronogramas. | Leitura. |
+| **`smartResearchTool`** | RAG / Busca Vetorial nos documentos do Cloudinha. | Embeddings + Leitura. |
+| **`duckDuckGoSearchTool`** | Busca na Web (Fallback). | Request Externo. |
 
 ---
 
 ## 4. Persistência de Dados
 
-*   **Sessão (Chat History)**: Gerenciada pelo `SupabaseSessionService` (`src/agent/memory/supabase_session.py`). As mensagens são salvas na tabela `chat_messages`.
-*   **Estado do Usuário**: Tabela `user_profiles`. Armazena flags de workflow (`active_workflow`, `onboarding_completed`) e dados demográficos.
-*   **Isolamento**: O campo `active_workflow` na tabela de mensagens permite reconstruir em qual contexto uma conversa aconteceu.
+*   **Sessão (Chat History)**: Tabela `chat_messages` (Supabase).
+*   **Estado do Usuário**: Tabela `user_profiles`. Armazena flags de workflow (`active_workflow`, `onboarding_completed`).
+*   **Preferências**: Tabela `user_preferences`. Armazena critérios de busca do Match.
+*   **Isolamento**: O campo `active_workflow` na tabela de mensagens permite reconstruir contexto.
 
-## 5. Exemplo de Trace (Happy Path - Match)
+## 5. Arquitetura de Aprendizado (Learning & Feedback)
 
-1.  **Usuário**: "Quero achar uma faculdade."
-2.  **Server**: Recebe request.
-3.  **Workflow**:
-    *   `onboarding_completed` é True.
-    *   `active_workflow` é None.
-    *   Executa **Root Agent**.
-4.  **Root Agent**:
-    *   Interpreta intenção de busca.
-    *   Chama `updateStudentProfileTool(updates={"active_workflow": "match_workflow"})`.
-    *   Responde: "Claro! Vamos encontrar a melhor opção para você."
-5.  **Workflow (Loop)**:
-    *   Detecta mudança para `match_workflow`.
-    *   Instancia `Match Workflow`.
-    *   Identifica passo 1 (`basic_prefs`).
-    *   Executa `basic_prefs_agent`.
-6.  **Match Agent**:
-    *   Pergunta: "Qual curso você quer e qual sua nota do Enem?"
-7.  **Usuário**: "Direito, tirei 700."
-8.  **Match Agent**:
-    *   Chama `updateStudentProfileTool`.
-    *   Chama `searchOpportunitiesTool`.
-    *   Retorna resultados.
+O sistema implementa o "Virtuous Loop":
+1.  **Feedback**: O sistema coleta feedback (implícito/explícito).
+2.  **Curadoria**: Exemplos positivos são armazenados como "Golden Examples".
+3.  **Injeção**: Durante o `run_workflow`, exemplos relevantes ao contexto atual são recuperados e injetados no prompt do agente, melhorando a performance continuamente sem deploy.
 
----
-
-## 6. Arquitetura de Aprendizado (Learning & Feedback)
-
-O sistema implementa um ciclo de melhoria contínua (Virtuous Loop) baseado em três pilares, conforme especificado em `nubo-ops/specs/learning_agent_feedback_loops.md`.
-
-### 6.1. Ciclos de Feedback
-1.  **Explícito (Human-in-the-Loop)**: Captura de "Joinha/Dedo para baixo" na interface. Feedback negativo gera alertas para revisão.
-2.  **Implícito (Sinais)**: Monitoramento de CTR (cliques em cards) e abandono de fluxo para inferir a qualidade do match.
-3.  **Algorítmico (LLM-as-a-Judge)**: Processo em batch que utiliza um modelo superior (ex: Gemini 1.5 Pro) para auditar conversas e extrair "Golden Examples".
-
-### 6.2. Aplicação do Conhecimento
-*   **Dynamic Few-Shotting**: Exemplos de alta qualidade (curados humana ou automaticamente) são indexados e injetados dinamicamente no prompt do agente.
-*   Isso permite que o agente "aprenda" novas regras ou corrija comportamentos sem alteração imediata de código (Code-less updates).

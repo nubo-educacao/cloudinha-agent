@@ -229,6 +229,11 @@ def searchOpportunitiesTool(
             program_preference = "prouni"
     
     # 5. Prepare RPC Parameters
+    # [FIX] If searching for Prouni, ignore Sisu-specific quota tags like 'ESCOLA_PUBLICA'
+    # which might block results if the Prouni dataset doesn't use them.
+    if program_preference == 'prouni':
+        quota_types = None
+
     page_size = 145
     
     rpc_params = {
@@ -362,6 +367,24 @@ def searchOpportunitiesTool(
         f"Encontrei {courses_count} cursos e um total de {total_opportunities_count} oportunidades nas quais você se encaixa. "
         "Os detalhes estão disponíveis no painel ao lado."
     )
+    
+    # Append Active Filters to Summary for Agent Context
+    filters_used = []
+    if course_interests:
+        filters_used.append(f"Cursos: {', '.join(course_interests)}")
+    if city_name:
+        filters_used.append(f"Cidade: {city_name}")
+    if normalized_shifts and not any(s.lower() in ['indiferente', 'qualquer'] for s in normalized_shifts):
+        filters_used.append(f"Turno: {', '.join(normalized_shifts)}")
+    if program_preference and program_preference != 'indiferente':
+        filters_used.append(f"Programa: {program_preference.capitalize()}")
+    if enem_score:
+         filters_used.append(f"Nota Enem: {enem_score}")
+    if per_capita_income:
+         filters_used.append(f"Renda: R$ {per_capita_income}")
+         
+    if filters_used:
+        summary_text += " Parâmetros utilizados: " + " | ".join(filters_used) + "."
         
     final_payload = {
         "summary": summary_text,
