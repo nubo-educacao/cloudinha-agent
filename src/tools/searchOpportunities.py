@@ -5,6 +5,7 @@ from src.lib.supabase import supabase
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 from src.tools.getStudentProfile import getStudentProfileTool
+from src.tools.suggestRefinement import suggestRefinementTool
 
 # Cache for city coordinates to avoid repeated API calls
 _CITY_COORDS_CACHE = {}
@@ -174,13 +175,26 @@ def searchOpportunitiesTool(
             user_lat = float(profile["device_latitude"])
             user_long = float(profile["device_longitude"])
             
-    # 3. Consolidate Filters (Fallback to profile if not provided)
+    # 3. Consolidate Filters (Prioritize Profile/Preferences)
     if per_capita_income is None:
         per_capita_income = profile.get("per_capita_income")
     
+    # [FIX] Always defer to saved quotas if not provided (or even if provided, depending on logic, but here efficient fallback)
     if not quota_types:
         quota_types = profile.get("quota_types")
-    
+
+    # [FIX] Always load ENEM score from preferences if not explicit
+    if enem_score is None and profile.get("enem_score"):
+        enem_score = float(profile["enem_score"])
+
+    # [FIX] Always load Location from preferences (location_preference > registered_city)
+    if not city_name:
+        # User preference takes precedence
+        if profile.get("location_preference"):
+             city_name = sanitize_search_input(profile.get("location_preference"))
+        elif profile.get("registered_city_name"):
+             city_name = sanitize_search_input(profile.get("registered_city_name"))
+
     # 4. Consolidate Course Interests
     # Get interests from profile
     profile_interests = profile.get("course_interest") or []
@@ -192,9 +206,6 @@ def searchOpportunitiesTool(
     
     # Add profile interests if available
     if profile_interests:
-        # profile_interests might be a list or comma-sep string depending on DB? 
-        # The tool returns what the DB has. The DB user_preferences definition says TEXT[].
-        # So it should be a list.
         if isinstance(profile_interests, list):
             course_interests.extend(profile_interests)
         elif isinstance(profile_interests, str):
@@ -204,17 +215,34 @@ def searchOpportunitiesTool(
     course_interests = list(set(c for c in course_interests if c))
 
     # Normalize Shifts
-    normalized_shifts = []
+    # [FIX] Merge/Use saved shifts
+    saved_shifts = profile.get("preferred_shifts") or []
+    
+    current_shifts = []
     if shift:
         if isinstance(shift, list):
-            normalized_shifts = [normalize_shift(s) for s in shift if s]
+            current_shifts.extend(shift)
         else:
-            normalized_shifts = [normalize_shift(str(shift))]
+            current_shifts.append(str(shift))
     
-    # Remove duplicates and empties
-    normalized_shifts = list(set(s for s in normalized_shifts if s))
+    # Combine current arg shifts with saved shifts
+    # (Assuming we want to match ANY preference)
+    all_shifts = list(set(current_shifts + saved_shifts))
+    
+    normalized_shifts = []
+    for s in all_shifts:
+        norm = normalize_shift(s)
+        if norm:
+            normalized_shifts.append(norm)
+    
+    # Remove duplicates
+    normalized_shifts = list(set(normalized_shifts))
 
     # Normalize Program Preference
+    # If not provided arg, check profile
+    if not program_preference and not institution_type:
+        program_preference = profile.get("program_preference")
+
     if not program_preference and institution_type:
         itype = institution_type.lower()
         if "púb" in itype or "pub" in itype or "sisu" in itype:
@@ -388,7 +416,19 @@ def searchOpportunitiesTool(
         
     final_payload = {
         "summary": summary_text,
-        "results": [] # Empty results for LLM context optimization
+        "results": [], # Empty results for LLM context optimization
+        "refinement_suggestion": None
     }
+
+    # Integrate Refinement Suggestion if count is high
+    if courses_count > 30 and user_id != "user":
+        try:
+             # Using suggestRefinementTool logic directly
+             suggestion = suggestRefinementTool(user_id, courses_count)
+             if suggestion and "SUGGESTION:" in suggestion:
+                 final_payload["refinement_suggestion"] = suggestion
+                 final_payload["summary"] += f"\n\n{suggestion}"
+        except Exception as e:
+            print(f"[WARN] Failed to generate refinement suggestion: {e}")
 
     return json.dumps(final_payload, ensure_ascii=False)

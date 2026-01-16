@@ -40,17 +40,29 @@ class SupabaseSession(Session):
             active_wf = self._get_active_workflow()
             print(f"[SupabaseSession] Loading with active_workflow Context: {active_wf}")
 
+            # [FIX] Removed strict workflow filtering to solve "Amnesia" issues.
+            # We now load the last 30 messages globally to preserve context across workflow switches.
+            
+            print(f"[SupabaseSession DEBUG] Entering load() for user {self.user_id}")
+            
             query = self.client.table("chat_messages") \
                 .select("*") \
-                .eq("user_id", self.user_id)
+                .eq("user_id", self.user_id) \
+                .order("created_at", desc=True) \
+                .limit(30)
             
-            if active_wf:
-                query = query.eq("workflow", active_wf)
+            # Remove validation of active_wf for SELECT - Context > Isolation
+            # if active_wf:
+            #    query = query.eq("workflow", active_wf)
                 
-            response = query.order("created_at", desc=False).execute()
+            response = query.execute()
             
             messages = []
-            data = response.data or []
+            # Reverse because we fetched desc for limit
+            data = response.data[::-1] if response.data else []
+            
+            print(f"[SupabaseSession DEBUG] load() fetched {len(data)} messages from DB")
+
             for record in data:
                 role = "user" if record["sender"] == "user" else "model"
                 content = Content(

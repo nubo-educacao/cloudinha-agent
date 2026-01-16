@@ -65,7 +65,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
         "active_workflow": profile_data.get("active_workflow") if profile_data else None,
         # workflow_data moved to preferences
         "full_name": profile_data.get("full_name") if profile_data else None,
-        "city_name": profile_data.get("city") if profile_data else None,
+        "registered_city_name": profile_data.get("city") if profile_data else None,
         "age": profile_data.get("age") if profile_data else None,
         "education": profile_data.get("education") if profile_data else None,
         "enem_score": preferences_data.get("enem_score") if preferences_data else None,
