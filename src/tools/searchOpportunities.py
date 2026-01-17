@@ -146,6 +146,7 @@ def searchOpportunitiesTool(
     user_id: str = "user", # Pass user_id to fetch profile fallback
     per_capita_income: Optional[float] = None,
     city_name: Optional[str] = None,
+    city_names: Optional[List[str]] = None, # New: support multiple cities
     shift: Union[str, List[str], None] = None, # can be str or list
     institution_type: Optional[str] = None,
     program_preference: Optional[str] = None,
@@ -159,8 +160,13 @@ def searchOpportunitiesTool(
     
     # 0. Sanitize Inputs
     course_name = sanitize_search_input(course_name) if course_name else ""
+    
+    # Consolidate Cities
+    final_city_names = []
+    if city_names:
+        final_city_names.extend([sanitize_search_input(c) for c in city_names if c])
     if city_name:
-        city_name = sanitize_search_input(city_name)
+        final_city_names.append(sanitize_search_input(city_name))
 
     # 1. Fetch Profile and Preferences (Unconditional)
     try:
@@ -188,12 +194,15 @@ def searchOpportunitiesTool(
         enem_score = float(profile["enem_score"])
 
     # [FIX] Always load Location from preferences (location_preference > registered_city)
-    if not city_name:
+    if not final_city_names:
         # User preference takes precedence
         if profile.get("location_preference"):
-             city_name = sanitize_search_input(profile.get("location_preference"))
+             final_city_names.append(sanitize_search_input(profile.get("location_preference")))
         elif profile.get("registered_city_name"):
-             city_name = sanitize_search_input(profile.get("registered_city_name"))
+             final_city_names.append(sanitize_search_input(profile.get("registered_city_name")))
+    
+    # Remove duplicates
+    final_city_names = list(set(final_city_names))
 
     # 4. Consolidate Course Interests
     # Get interests from profile
@@ -273,7 +282,7 @@ def searchOpportunitiesTool(
         "program_preference": program_preference,
         "user_lat": user_lat,
         "user_long": user_long,
-        "city_name": city_name,
+        "city_names": final_city_names if final_city_names else None,
         "page_size": page_size,
         "page_number": 0 
     }
@@ -400,8 +409,8 @@ def searchOpportunitiesTool(
     filters_used = []
     if course_interests:
         filters_used.append(f"Cursos: {', '.join(course_interests)}")
-    if city_name:
-        filters_used.append(f"Cidade: {city_name}")
+    if final_city_names:
+        filters_used.append(f"Cidades: {', '.join(final_city_names)}")
     if normalized_shifts and not any(s.lower() in ['indiferente', 'qualquer'] for s in normalized_shifts):
         filters_used.append(f"Turno: {', '.join(normalized_shifts)}")
     if program_preference and program_preference != 'indiferente':
