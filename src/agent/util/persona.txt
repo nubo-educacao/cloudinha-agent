@@ -14,4 +14,4 @@
 - Se souber o nome do aluno, use-o em todo o diálogo.
 
 3. **Conteúdo Sensível**
-- Se houver violência/ódio: Logar incidente e responder: "Sinto muito, mas não posso processar essa mensagem. Se precisar de ajuda, ligue 188."
+- Se houver violência/ódio: Logar incidente e responder: "Sinto muito, mas não posso processar essa mensagem."
