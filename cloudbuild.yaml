@@ -1,14 +1,18 @@
+substitutions:
+  _SERVICE_NAME: cloudinha-agent
+  _IMAGE_TAG: latest
+
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/cloudinha-agent:$SHORT_SHA', '-t', 'gcr.io/$PROJECT_ID/cloudinha-agent:latest', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA', '-t', 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:${_IMAGE_TAG}', '.']
   
   # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/cloudinha-agent:$SHORT_SHA']
+    args: ['push', 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA']
   
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/cloudinha-agent:latest']
+    args: ['push', 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:${_IMAGE_TAG}']
 
   # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -16,17 +20,17 @@ steps:
     args:
     - 'run'
     - 'deploy'
-    - 'cloudinha-agent'
+    - '${_SERVICE_NAME}'
     - '--image'
-    - 'gcr.io/$PROJECT_ID/cloudinha-agent:$SHORT_SHA'
+    - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA'
     - '--region'
     - 'southamerica-east1'
     - '--platform'
     - 'managed'
 
 images:
-  - 'gcr.io/$PROJECT_ID/cloudinha-agent:$SHORT_SHA'
-  - 'gcr.io/$PROJECT_ID/cloudinha-agent:latest'
+  - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA'
+  - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:${_IMAGE_TAG}'
 
 options:
   logging: CLOUD_LOGGING_ONLY

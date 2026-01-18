@@ -11,7 +11,8 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         user_id: ID do usuário (pode ser "user" para debug locais).
         updates: Dicionário contendo os campos a atualizar. 
                  Chaves comuns: 'course_interest', 'enem_score', 'preferred_shifts', 'city_name', 
-                 'university_preference', 'program_preference', 'quota_types', 'per_capita_income'.
+                 'university_preference', 'program_preference', 'quota_types', 'per_capita_income',
+                 'state_preference'.
     """
     
 
@@ -191,8 +192,9 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         score = pf.get("enem_score")
         shifts = pf.get("preferred_shifts")
         uni_type = pf.get("university_preference")
+        state_pref = pf.get("state_preference")
 
-        has_any_filter = bool(c_interest) or (score is not None) or bool(shifts) or bool(uni_type)
+        has_any_filter = bool(c_interest) or (score is not None) or bool(shifts) or bool(uni_type) or bool(state_pref)
         
         # Determine if we should search (Basic logic: if we have any filter, try searching)
         should_search = has_any_filter
@@ -212,7 +214,7 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
                 results["workflow_switched"] = True
 
             # EXECUTE SEARCH
-            print(f"!!! [AUTO SEARCH] Triggering search with: course={c_interest}, score={score}, shifts={shifts}, uni={uni_type}")
+            print(f"!!! [AUTO SEARCH] Triggering search with: course={c_interest}, score={score}, shifts={shifts}, uni={uni_type}, state={state_pref}")
             
             search_course = ""
             if isinstance(c_interest, list) and len(c_interest) > 0:
@@ -231,7 +233,8 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
                 quota_types=pf.get("quota_types"),
                 user_lat=pf.get("device_latitude"),
                 user_long=pf.get("device_longitude"),
-                city_name=pf.get("location_preference")
+                city_name=pf.get("location_preference"),
+                state_name=pf.get("state_preference")
             )
             
             try:
