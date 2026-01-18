@@ -2,26 +2,86 @@ from typing import Optional, Dict, Any, List, Union
 import json
 from src.lib.supabase import supabase
 
-def standardize_city(city_input: str) -> Optional[Dict[str, str]]:
+# Cache for state mappings
+_STATES_CACHE = {}
+
+def _load_states_cache():
+    """Load and cache all states from the database."""
+    global _STATES_CACHE
+    if _STATES_CACHE:
+        return
+    try:
+        response = supabase.table("states").select("uf, name").execute()
+        if response.data:
+            for row in response.data:
+                uf = row["uf"].upper()
+                name = row["name"].lower()
+                _STATES_CACHE[uf] = uf  # UF -> UF
+                _STATES_CACHE[name] = uf  # Full name -> UF
+                # Also add unaccented version for common cases
+                name_simple = name.replace("á", "a").replace("ã", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ô", "o").replace("ú", "u")
+                if name_simple != name:
+                    _STATES_CACHE[name_simple] = uf
+            print(f"!!! [STATES CACHE] Loaded {len(response.data)} states")
+    except Exception as e:
+        print(f"[WARN] Failed to load states cache: {e}")
+
+def standardize_state(state_input: str) -> Optional[str]:
     """
-    Match city name against cities table using fuzzy search.
-    Returns {"name": standardized_name, "state": state_code} or None.
+    Normalizes a state input (full name or UF) to the standard UF code.
+    Returns the UF code (e.g., 'GO', 'MG') or None if not found.
     """
-    if not city_input or not city_input.strip():
+    if not state_input:
         return None
     
+    _load_states_cache()
+    
+    # Clean and lowercase for lookup
+    cleaned = state_input.strip().lower()
+    
+    # Direct lookup
+    if cleaned in _STATES_CACHE:
+        return _STATES_CACHE[cleaned]
+    
+    # Try uppercase (for UF codes)
+    upper = state_input.strip().upper()
+    if upper in _STATES_CACHE:
+        return _STATES_CACHE[upper]
+    
+    # Fallback: Query database directly with fuzzy match
     try:
-        # First try exact match (case-insensitive)
+        response = supabase.table("states").select("uf, name").or_(f"uf.ilike.{cleaned},name.ilike.%{cleaned}%").limit(1).execute()
+        if response.data:
+            uf = response.data[0]["uf"]
+            # Add to cache for future lookups
+            _STATES_CACHE[cleaned] = uf
+            print(f"!!! [STATE STANDARDIZED] '{state_input}' -> '{uf}'")
+            return uf
+    except Exception as e:
+        print(f"[WARN] State lookup failed for '{state_input}': {e}")
+    
+    return None
+
+def standardize_city(city_input: str) -> Optional[Dict[str, str]]:
+    """
+    Looks up a city in the 'cities' table and returns standardized data.
+    Returns {"name": standardized_name, "state": state_code} or None.
+    """
+    if not city_input:
+        return None
+    try:
+        # Exact match first
         response = supabase.table("cities").select("name, state").ilike("name", city_input.strip()).limit(1).execute()
         if response.data:
             return {"name": response.data[0]["name"], "state": response.data[0]["state"]}
         
-        # Fallback to partial match
+        # Fuzzy/partial match
         response = supabase.table("cities").select("name, state").ilike("name", f"%{city_input.strip()}%").limit(1).execute()
         if response.data:
             return {"name": response.data[0]["name"], "state": response.data[0]["state"]}
+            
     except Exception as e:
-        print(f"[WARN] City standardization failed: {e}")
+        print(f"[WARN] City lookup failed for '{city_input}': {e}")
     
     return None
 
