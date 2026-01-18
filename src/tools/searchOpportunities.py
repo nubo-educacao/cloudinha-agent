@@ -6,6 +6,7 @@ from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.suggestRefinement import suggestRefinementTool
+from src.tools.updateStudentProfile import standardize_state
 
 # Cache for city coordinates to avoid repeated API calls
 _CITY_COORDS_CACHE = {}
@@ -231,9 +232,17 @@ def searchOpportunitiesTool(
     
     final_city_names = list(set(mapped_cities))
 
-    # States: Keep as-is (database uses abbreviations like MT, SP, etc.)
-    # Just normalize to uppercase for consistency
-    final_state_names = [s.upper().strip() for s in final_state_names if s]
+    # States: Normalize to UF codes using standardize_state
+    normalized_states = []
+    for s in final_state_names:
+        if s:
+            normalized = standardize_state(s.strip())
+            if normalized:
+                normalized_states.append(normalized)
+            else:
+                # Fallback: keep as uppercase if not found in DB
+                normalized_states.append(s.strip().upper())
+    final_state_names = list(set(normalized_states))
 
     # 4. Consolidate Course Interests
     # Get interests from profile

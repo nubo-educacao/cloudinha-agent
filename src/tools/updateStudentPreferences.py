@@ -2,7 +2,7 @@ from typing import Optional, Dict, Any, List, Union
 import json
 from src.lib.supabase import supabase
 from src.tools.searchOpportunities import searchOpportunitiesTool
-from src.tools.updateStudentProfile import standardize_city
+from src.tools.updateStudentProfile import standardize_city, standardize_state
 
 def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     """
@@ -106,7 +106,15 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
              preferences_updates["workflow_data"] = workflow_update
              
     if "state_preference" in updates:
-        preferences_updates["state_preference"] = updates["state_preference"]
+        raw_state = updates["state_preference"]
+        normalized_state = standardize_state(raw_state)
+        if normalized_state:
+            preferences_updates["state_preference"] = normalized_state
+            print(f"!!! [STATE STANDARDIZED] '{raw_state}' -> '{normalized_state}'")
+        else:
+            # Keep original but log warning
+            preferences_updates["state_preference"] = raw_state
+            print(f"!!! [STATE NOT FOUND] Keeping original: '{raw_state}'")
     
     # Standardize city/location preference
     if "city_name" in updates:
