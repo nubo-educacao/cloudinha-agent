@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any, List, Union
 import json
 from src.lib.supabase import supabase
 from src.tools.searchOpportunities import searchOpportunitiesTool
+from src.tools.updateStudentProfile import standardize_city
 
 def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     """
@@ -106,10 +107,26 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
              
     if "state_preference" in updates:
         preferences_updates["state_preference"] = updates["state_preference"]
+    
+    # Standardize city/location preference
     if "city_name" in updates:
-        preferences_updates["location_preference"] = updates["city_name"]
-    elif "location_preference" in updates: # Direct key support
-        preferences_updates["location_preference"] = updates["location_preference"]
+        raw_city = updates["city_name"]
+        standardized = standardize_city(raw_city)
+        if standardized:
+            preferences_updates["location_preference"] = standardized["name"]
+            preferences_updates["state_preference"] = standardized["state"]
+            print(f"!!! [PREFS CITY STANDARDIZED] '{raw_city}' -> '{standardized['name']}' ({standardized['state']})")
+        else:
+            preferences_updates["location_preference"] = raw_city
+    elif "location_preference" in updates:
+        raw_city = updates["location_preference"]
+        standardized = standardize_city(raw_city)
+        if standardized:
+            preferences_updates["location_preference"] = standardized["name"]
+            preferences_updates["state_preference"] = standardized["state"]
+            print(f"!!! [PREFS CITY STANDARDIZED] '{raw_city}' -> '{standardized['name']}' ({standardized['state']})")
+        else:
+            preferences_updates["location_preference"] = raw_city
 
     # --- 4. Shift Normalization ---
     def normalize_shift_value(val: str) -> str:
@@ -194,7 +211,18 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         uni_type = pf.get("university_preference")
         state_pref = pf.get("state_preference")
 
-        has_any_filter = bool(c_interest) or (score is not None) or bool(shifts) or bool(uni_type) or bool(state_pref)
+        # Check for ANY preference that could filter search results
+        has_any_filter = (
+            bool(c_interest) or 
+            (score is not None) or 
+            bool(shifts) or 
+            bool(uni_type) or 
+            bool(state_pref) or 
+            bool(pf.get("location_preference")) or
+            bool(pf.get("program_preference")) or
+            bool(pf.get("quota_types")) or
+            (pf.get("family_income_per_capita") is not None)
+        )
         
         # Determine if we should search (Basic logic: if we have any filter, try searching)
         should_search = has_any_filter
@@ -228,6 +256,7 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
                 enem_score=float(score) if score is not None else 0.0,
                 shift=shifts,
                 institution_type=uni_type,
+                university_preference=uni_type, # Explicit: pass uni_type also as university_preference
                 program_preference=pf.get("program_preference"),
                 per_capita_income=pf.get("family_income_per_capita"),
                 quota_types=pf.get("quota_types"),
