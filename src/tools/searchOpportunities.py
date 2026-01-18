@@ -152,6 +152,7 @@ def searchOpportunitiesTool(
     shift: Union[str, List[str], None] = None, # can be str or list
     institution_type: Optional[str] = None,
     program_preference: Optional[str] = None,
+    university_preference: Optional[str] = None, # New: Explicit Uni Pref
     quota_types: Optional[List[str]] = None,
     user_lat: Optional[float] = None,
     user_long: Optional[float] = None
@@ -230,6 +231,10 @@ def searchOpportunitiesTool(
     
     final_city_names = list(set(mapped_cities))
 
+    # States: Keep as-is (database uses abbreviations like MT, SP, etc.)
+    # Just normalize to uppercase for consistency
+    final_state_names = [s.upper().strip() for s in final_state_names if s]
+
     # 4. Consolidate Course Interests
     # Get interests from profile
     profile_interests = profile.get("course_interest") or []
@@ -277,6 +282,10 @@ def searchOpportunitiesTool(
     # If not provided arg, check profile
     if not program_preference and not institution_type:
         program_preference = profile.get("program_preference")
+        
+    # [FIX] Consolidate University Preference
+    if not university_preference:
+        university_preference = profile.get("university_preference")
 
     if not program_preference and institution_type:
         itype = institution_type.lower()
@@ -297,7 +306,7 @@ def searchOpportunitiesTool(
     if program_preference == 'prouni':
         quota_types = None
 
-    page_size = 145
+    page_size = 2880
     
     rpc_params = {
         "course_interests": course_interests if course_interests else None,
@@ -310,9 +319,18 @@ def searchOpportunitiesTool(
         "user_long": user_long,
         "city_names": final_city_names if final_city_names else None,
         "state_names": final_state_names if final_state_names else None,
+        "university_preference": None,  # Always pass None - filter not implemented in RPC yet
         "page_size": page_size,
         "page_number": 0 
     }
+
+    # [PERFORMANCE] Quota-only searches are too slow - require additional filters
+    if quota_types and not course_interests and not final_city_names and not final_state_names:
+        return json.dumps({
+            "summary": "Para buscar por cotas (ex: PPI, PCD), preciso que você informe também um curso, cidade ou estado de interesse. Isso ajuda a encontrar resultados mais rápido!",
+            "results": [],
+            "needs_refinement": True
+        }, ensure_ascii=False)
 
     print(f"!!! [DEBUG SEARCH] Calling RPC match_opportunities with {rpc_params}")
 
@@ -321,29 +339,17 @@ def searchOpportunitiesTool(
         courses = response.data
     except Exception as e:
         error_msg = str(e)
-        if "statement timeout" in error_msg.lower() or "57014" in error_msg:
-             # TiMEOUT -> Call Refinement Tool
-             try:
-                 if user_id and user_id != "user":
-                     suggestion = suggestRefinementTool(user_id, 1000) # Pass fake high count context
-                     if suggestion:
-                         return json.dumps({
-                            "summary": f"A busca demorou muito para responder (muitos resultados). {suggestion}",
-                            "results": [],
-                            "refinement_suggestion": suggestion
-                        }, ensure_ascii=False)
-             except:
-                 pass
+        print(f"!!! [SEARCH ERROR] RPC failed: {error_msg}")
+        
+        # Any RPC error (500, timeout, etc) - return clear internal error message
+        return json.dumps({
+            "summary": "Ocorreu um erro interno na busca. Por favor, tente novamente mais tarde ou refine a busca com cidade e curso específicos.",
+            "results": [],
+            "error": True
+        }, ensure_ascii=False)
 
-             return json.dumps({
-                "summary": "A busca foi muito ampla e excedeu o tempo limite. Por favor, peça para o usuário refinar a busca adicionando um Curso específico, Cidade ou Estado.",
-                "results": []
-            }, ensure_ascii=False)
-        return json.dumps({"error": f"RPC call failed: {str(e)}"}, ensure_ascii=False)
-
-    # CHECK OVERFLOW (Strict Requirement: If >= 145, ask for refinement)
-    # CHECK OVERFLOW (Strict Requirement: If >= 145, ask for refinement)
-    if courses and len(courses) >= 145:
+    # CHECK OVERFLOW (Strict Requirement: If >= 2880, ask for refinement)
+    if courses and len(courses) >= 2880:
         refinement_msg = "A busca está muito ampla. Por favor, peça para o usuário adicionar mais critérios."
         suggestion = None
         
@@ -356,7 +362,7 @@ def searchOpportunitiesTool(
              pass
 
         return json.dumps({
-            "summary": f"Encontrei muitos resultados (mais de 144). {refinement_msg}",
+            "summary": f"Encontrei muitos resultados (mais de 2879). {refinement_msg}",
             "results": [],
             "refinement_suggestion": suggestion
         }, ensure_ascii=False)
@@ -367,59 +373,31 @@ def searchOpportunitiesTool(
             "results": []
         }, ensure_ascii=False)
 
-    # 2. Process and Filter Results (Python Side)
+    # 2. Process Results (Python Side)
+    # NOTE: The RPC now returns FLAT records (one per course group), not nested opportunities_json
     processed_results = []
-    
-    # Pre-calculate excluded tags based on income
-    excluded_tags = get_excluded_tags_by_income(per_capita_income if per_capita_income is not None else None)
-
     total_opportunities_count = 0
 
     for course in courses:
-        raw_opps = course.get("opportunities_json") or []
-        filtered_opps_summary = []
+        # Each course record IS the opportunity data (already aggregated by RPC)
+        # No more opportunities_json iteration needed
         
-        # Track metadata for summary
-        shifts_found = set()
-        types_found = set()
-        min_cutoff = 1000.0
+        course_shift = course.get("shift", "")
+        course_type = course.get("opportunity_type", "")
+        course_cutoff = course.get("cutoff_score")
         
-        for opp in raw_opps:
-            # Income Exclusion (Final Safety Check)
-            opp_tags = opp.get("concurrency_tags", [])
-            if should_exclude_by_income(opp_tags, excluded_tags):
-                continue
-
-            # Shift Filter
-            is_indifferent_shift = any(x.lower() in ['indiferente', 'tanto faz', 'qualquer'] for x in (shift if isinstance(shift, list) else [str(shift or '')]))
-            
-            if normalized_shifts and not is_indifferent_shift:
-                 opp_shift = normalize_shift(opp.get("shift", ""))
-                 if opp_shift not in normalized_shifts:
-                     continue
-            
-            # Add to summary
-            filtered_opps_summary.append(opp)
-            shifts_found.add(opp.get("shift"))
-            types_found.add(opp.get("scholarship_type") or opp.get("opportunity_type"))
-            
-            sc = opp.get("cutoff_score")
-            if sc and sc < min_cutoff:
-                min_cutoff = sc
-
-        if filtered_opps_summary:
-            total_opportunities_count += len(filtered_opps_summary)
-            # Build Output Object (Needed only for persist logic, not for LLM return now)
-            processed_results.append({
-                "course": course.get("course_name"),
-                "institution": course.get("institution_name"),
-                "location": f"{course.get('campus_city')} - {course.get('campus_state')}" + (f" ({course.get('distance_km'):.1f}km)" if course.get('distance_km') is not None else ""),
-                "opportunities_count": len(filtered_opps_summary),
-                "types": list(types_found),
-                "shifts": list(shifts_found),
-                "best_cutoff": min_cutoff if min_cutoff < 1000 else None,
-                "course_id": course.get("course_id") 
-            })
+        # Build Output Object
+        processed_results.append({
+            "course": course.get("course_name"),
+            "institution": course.get("institution_name"),
+            "location": f"{course.get('campus_city')} - {course.get('campus_state')}" + (f" ({course.get('distance_km'):.1f}km)" if course.get('distance_km') is not None else ""),
+            "opportunities_count": 1,  # Each record is one grouped opportunity
+            "types": [course_type] if course_type else [],
+            "shifts": [course_shift] if course_shift else [],
+            "best_cutoff": float(course_cutoff) if course_cutoff is not None else None,
+            "course_id": course.get("course_id") 
+        })
+        total_opportunities_count += 1
 
     # --- PERSISTENCE: Save Found IDs to Workflow Data ---
     try:
@@ -484,8 +462,8 @@ def searchOpportunitiesTool(
         "refinement_suggestion": None
     }
 
-    # Integrate Refinement Suggestion if count is high
-    if courses_count > 30 and user_id != "user":
+    # Integrate Refinement Suggestion if count is high (> 12 results)
+    if courses_count > 12 and user_id != "user":
         try:
              # Using suggestRefinementTool logic directly
              suggestion = suggestRefinementTool(user_id, courses_count)
