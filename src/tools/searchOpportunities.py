@@ -147,6 +147,8 @@ def searchOpportunitiesTool(
     per_capita_income: Optional[float] = None,
     city_name: Optional[str] = None,
     city_names: Optional[List[str]] = None, # New: support multiple cities
+    state_name: Optional[str] = None, # New: support state
+    state_names: Optional[List[str]] = None, # New: support multiple states
     shift: Union[str, List[str], None] = None, # can be str or list
     institution_type: Optional[str] = None,
     program_preference: Optional[str] = None,
@@ -167,6 +169,13 @@ def searchOpportunitiesTool(
         final_city_names.extend([sanitize_search_input(c) for c in city_names if c])
     if city_name:
         final_city_names.append(sanitize_search_input(city_name))
+
+    # Consolidate States
+    final_state_names = []
+    if state_names:
+        final_state_names.extend([sanitize_search_input(s) for s in state_names if s])
+    if state_name:
+        final_state_names.append(sanitize_search_input(state_name))
 
     # 1. Fetch Profile and Preferences (Unconditional)
     try:
@@ -194,15 +203,32 @@ def searchOpportunitiesTool(
         enem_score = float(profile["enem_score"])
 
     # [FIX] Always load Location from preferences (location_preference > registered_city)
-    if not final_city_names:
-        # User preference takes precedence
-        if profile.get("location_preference"):
-             final_city_names.append(sanitize_search_input(profile.get("location_preference")))
-        elif profile.get("registered_city_name"):
-             final_city_names.append(sanitize_search_input(profile.get("registered_city_name")))
+    if not final_city_names and profile.get("location_preference"):
+         final_city_names.append(sanitize_search_input(profile.get("location_preference")))
     
-    # Remove duplicates
-    final_city_names = list(set(final_city_names))
+    # [FIX] Always load State from preferences
+    if not final_state_names and profile.get("state_preference"):
+         final_state_names.append(sanitize_search_input(profile.get("state_preference")))
+    
+    # [FIX] Handle Common Abbreviations (Simple Mapping)
+    CITY_ABBREVIATIONS = {
+        "sp": "São Paulo",
+        "rj": "Rio de Janeiro",
+        "bh": "Belo Horizonte",
+        "df": "Brasília",
+        "bsb": "Brasília"
+    }
+
+    # Expand/Map cities
+    mapped_cities = []
+    for city in final_city_names:
+        lower_city = city.lower().strip()
+        if lower_city in CITY_ABBREVIATIONS:
+             mapped_cities.append(CITY_ABBREVIATIONS[lower_city])
+        else:
+             mapped_cities.append(city)
+    
+    final_city_names = list(set(mapped_cities))
 
     # 4. Consolidate Course Interests
     # Get interests from profile
@@ -283,6 +309,7 @@ def searchOpportunitiesTool(
         "user_lat": user_lat,
         "user_long": user_long,
         "city_names": final_city_names if final_city_names else None,
+        "state_names": final_state_names if final_state_names else None,
         "page_size": page_size,
         "page_number": 0 
     }
@@ -295,6 +322,19 @@ def searchOpportunitiesTool(
     except Exception as e:
         error_msg = str(e)
         if "statement timeout" in error_msg.lower() or "57014" in error_msg:
+             # TiMEOUT -> Call Refinement Tool
+             try:
+                 if user_id and user_id != "user":
+                     suggestion = suggestRefinementTool(user_id, 1000) # Pass fake high count context
+                     if suggestion:
+                         return json.dumps({
+                            "summary": f"A busca demorou muito para responder (muitos resultados). {suggestion}",
+                            "results": [],
+                            "refinement_suggestion": suggestion
+                        }, ensure_ascii=False)
+             except:
+                 pass
+
              return json.dumps({
                 "summary": "A busca foi muito ampla e excedeu o tempo limite. Por favor, peça para o usuário refinar a busca adicionando um Curso específico, Cidade ou Estado.",
                 "results": []
@@ -302,10 +342,23 @@ def searchOpportunitiesTool(
         return json.dumps({"error": f"RPC call failed: {str(e)}"}, ensure_ascii=False)
 
     # CHECK OVERFLOW (Strict Requirement: If >= 145, ask for refinement)
+    # CHECK OVERFLOW (Strict Requirement: If >= 145, ask for refinement)
     if courses and len(courses) >= 145:
+        refinement_msg = "A busca está muito ampla. Por favor, peça para o usuário adicionar mais critérios."
+        suggestion = None
+        
+        try:
+             if user_id and user_id != "user":
+                 suggestion = suggestRefinementTool(user_id, len(courses))
+                 if suggestion:
+                     refinement_msg = suggestion
+        except:
+             pass
+
         return json.dumps({
-            "summary": "Encontrei muitos resultados (mais de 144). A busca está muito ampla. Por favor, peça para o usuário adicionar mais critérios (Ex: Curso específico, Cidade, Estado ou Instituição).",
-            "results": []
+            "summary": f"Encontrei muitos resultados (mais de 144). {refinement_msg}",
+            "results": [],
+            "refinement_suggestion": suggestion
         }, ensure_ascii=False)
 
     if not courses:
@@ -411,6 +464,8 @@ def searchOpportunitiesTool(
         filters_used.append(f"Cursos: {', '.join(course_interests)}")
     if final_city_names:
         filters_used.append(f"Cidades: {', '.join(final_city_names)}")
+    if final_state_names:
+        filters_used.append(f"Estados: {', '.join(final_state_names)}")
     if normalized_shifts and not any(s.lower() in ['indiferente', 'qualquer'] for s in normalized_shifts):
         filters_used.append(f"Turno: {', '.join(normalized_shifts)}")
     if program_preference and program_preference != 'indiferente':
