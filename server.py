@@ -99,6 +99,13 @@ async def safe_save_message(app_name: str, session_id: str, user_id: str, chat_i
     else:
         print("Warning: current_session does not support insert_messages")
 
+from src import __version__ as agent_version
+
+@app.get("/version")
+async def get_version():
+    return {"version": agent_version}
+
+
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     print(f"Received request: {request}", flush=True)

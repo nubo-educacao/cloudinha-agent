@@ -174,7 +174,55 @@ async def run_workflow(
                     profile_state["active_workflow"] = "onboarding_workflow"
 
         elif profile_state.get("active_workflow") == "match_workflow":
-                active_step_agent = match_agent
+                # --- MATCH AGENT SPLIT (Reasoning -> Response) ---
+                from src.agent.match_reasoning import match_reasoning_agent
+                from src.agent.match_response import match_response_agent
+                
+                print("[Match] Running Reasoning Agent...")
+                reasoning_output = ""
+                
+                # 1. Run Reasoning Agent (Tool Execution & Logic)
+                # We do NOT let it stream text to the user to avoid breaking character.
+                # We DO stream tool events so the user sees "Searching...".
+                
+                r_runner = Runner(agent=match_reasoning_agent, app_name="cloudinha-agent", session_service=session_service)
+                
+                # Yield "Thinking" event? 
+                yield {
+                    "type": "tool_start",
+                    "tool": "ReasoningEngine",
+                    "args": {"action": "analyzing_request"}
+                }
+
+                async for r_event in r_runner.run_async(user_id=user_id, session_id=session_id, new_message=current_message):
+                    # Pass through tool events
+                    if isinstance(r_event, dict) and r_event.get('type') in ['tool_start', 'tool_end']:
+                        yield r_event
+                    # Capture text
+                    elif hasattr(r_event, 'text') and r_event.text:
+                        reasoning_output += r_event.text
+                    elif hasattr(r_event, 'content') and r_event.content.parts:
+                        for p in r_event.content.parts:
+                            if p.text: reasoning_output += p.text
+                
+                yield {
+                    "type": "tool_end",
+                    "tool": "ReasoningEngine",
+                    "output": "Análise concluída"
+                }
+                
+                print(f"[Match] Reasoning Output: {reasoning_output}")
+                
+                # 2. Setup Response Agent (Persona)
+                # We inject the reasoning output into the message context for the Response Agent.
+                
+                user_original_text = current_message.parts[0].text if current_message.parts else ""
+                context_msg_text = f"REASONING_REPORT:\n{reasoning_output}\n\nUSER_MESSAGE:\n{user_original_text}"
+                
+                # Update 'current_message' and 'active_step_agent' for the downstream loop to execute Response Agent
+                current_message = Content(role="user", parts=[Part(text=context_msg_text)])
+                active_step_agent = match_response_agent
+
         elif profile_state.get("active_workflow") == "sisu_workflow":
                 active_step_agent = sisu_agent
         elif profile_state.get("active_workflow") == "prouni_workflow":

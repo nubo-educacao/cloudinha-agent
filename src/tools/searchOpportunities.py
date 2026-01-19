@@ -2,14 +2,12 @@ import re
 import json
 from typing import Optional, List, Set, Dict, Union
 from src.lib.supabase import supabase
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut
+# from geopy.geocoders import Nominatim (Removed)
+# from geopy.exc import GeocoderTimedOut (Removed)
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.suggestRefinement import suggestRefinementTool
 from src.tools.updateStudentProfile import standardize_state
 
-# Cache for city coordinates to avoid repeated API calls
-_CITY_COORDS_CACHE = {}
 
 # Constants for Income Logic
 SALARIO_MINIMO = 1621.0
@@ -32,23 +30,28 @@ def sanitize_search_input(text: str) -> str:
     # Keep only safe characters: letters (including unicode), numbers, spaces, - and .
     return re.sub(r'[^a-zA-ZÀ-ÿ0-9\s\-\.]', '', text)
 
-def get_city_coordinates(city_name: str):
+def get_city_coordinates_from_db(city_name: str, state_code: Optional[str] = None):
     """
-    Get latitude and longitude for a city name using Nominatim.
-    Uses a simple in-memory cache.
+    Get latitude and longitude for a city name using the Supabase 'cities' table.
     """
-    if city_name in _CITY_COORDS_CACHE:
-        return _CITY_COORDS_CACHE[city_name]
+    if not city_name:
+        return None
 
     try:
-        geolocator = Nominatim(user_agent="cloudinha_agent")
-        location = geolocator.geocode(city_name + ", Brasil") # Assuming Brasil context
-        if location:
-            coords = (location.latitude, location.longitude)
-            _CITY_COORDS_CACHE[city_name] = coords
-            return coords
-    except (GeocoderTimedOut, Exception) as e:
-        print(f"Error geocoding {city_name}: {e}")
+        query = supabase.table("cities").select("latitude, longitude").ilike("name", city_name)
+        
+        if state_code:
+            query = query.eq("state", state_code)
+            
+        result = query.execute()
+        
+        if result.data and len(result.data) > 0:
+            # Return the first match (usually accurate enough if state is provided)
+            record = result.data[0]
+            return float(record['latitude']), float(record['longitude'])
+            
+    except Exception as e:
+        print(f"Error fetching coordinates for {city_name} from DB: {e}")
     
     return None
 
@@ -187,7 +190,34 @@ def searchOpportunitiesTool(
         profile = {}
 
     # 2. Consolidate Location
-    if user_lat is None or user_long is None:
+    # 2. Consolidate Location & Geocoding
+    # Priority:
+    # A. If City provided -> Try to resolve Coords from DB -> If Found, Use Coords + Clear City Filter (Proximity Search)
+    # B. If No City but Device Location -> Use Device Location
+    
+    is_proximity_search = False
+    
+    # Try to resolve coordinates from the first requested city
+    if final_city_names:
+        target_city = final_city_names[0]
+        # Try to find a hint for the state to disambiguate
+        target_state = final_state_names[0] if final_state_names else None
+        
+        coords = get_city_coordinates_from_db(target_city, target_state)
+        
+        if coords:
+            print(f"[DEBUG] Resolved {target_city} to {coords}. Switch to PROXIMITY SEARCH.")
+            user_lat, user_long = coords
+            # !!! CRITICAL CHANGE !!!
+            # Clear text filters to allow returning results from neighboring cities
+            final_city_names = None 
+            final_state_names = None 
+            is_proximity_search = True
+        else:
+            print(f"[DEBUG] Could not resolve coordinates for {target_city}. Fallback to TEXT FILTER.")
+    
+    # Fallback to Device Location if not searching for a specific city
+    if (user_lat is None or user_long is None) and not is_proximity_search:
         if profile.get("device_latitude") and profile.get("device_longitude"):
             user_lat = float(profile["device_latitude"])
             user_long = float(profile["device_longitude"])
@@ -221,27 +251,28 @@ def searchOpportunitiesTool(
         "bsb": "Brasília"
     }
 
-    # Expand/Map cities
+    # Expand/Map cities (Only if we are using text search)
     mapped_cities = []
-    for city in final_city_names:
-        lower_city = city.lower().strip()
-        if lower_city in CITY_ABBREVIATIONS:
-             mapped_cities.append(CITY_ABBREVIATIONS[lower_city])
-        else:
-             mapped_cities.append(city)
+    if final_city_names:
+        for city in final_city_names:
+            lower_city = city.lower().strip()
+            if lower_city in CITY_ABBREVIATIONS:
+                 mapped_cities.append(CITY_ABBREVIATIONS[lower_city])
+            else:
+                 mapped_cities.append(city)
+        final_city_names = list(set(mapped_cities))
     
-    final_city_names = list(set(mapped_cities))
-
     # States: Normalize to UF codes using standardize_state
     normalized_states = []
-    for s in final_state_names:
-        if s:
-            normalized = standardize_state(s.strip())
-            if normalized:
-                normalized_states.append(normalized)
-            else:
-                # Fallback: keep as uppercase if not found in DB
-                normalized_states.append(s.strip().upper())
+    if final_state_names:
+        for s in final_state_names:
+            if s:
+                normalized = standardize_state(s.strip())
+                if normalized:
+                    normalized_states.append(normalized)
+                else:
+                    # Fallback: keep as uppercase if not found in DB
+                    normalized_states.append(s.strip().upper())
     final_state_names = list(set(normalized_states))
 
     # 4. Consolidate Course Interests
