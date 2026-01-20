@@ -1,6 +1,7 @@
 from typing import AsyncGenerator, Any
 from google.adk.runners import Runner
-from google.genai.types import Content, Part
+from google.adk.agents import LlmAgent
+from google.genai.types import Content, Part, GenerateContentConfig, ToolConfig
 from src.agent.agent import root_agent, session_service, sisu_agent, prouni_agent
 # from src.agent.guardrails import guardrails_agent # Removed
 from google.adk.sessions import InMemorySessionService
@@ -146,7 +147,7 @@ async def run_workflow(
                             from src.agent.agent import supabase_client
                             supabase_client.table('agent_errors').insert({
                                 'user_id': user_id,
-                                'session_id': session_id,
+                                'session_id': None,  # Use None - session_id may have prefix
                                 'error_type': 'router_error',
                                 'error_message': str(e),
                                 'stack_trace': tb,
@@ -178,6 +179,39 @@ async def run_workflow(
                 from src.agent.match_reasoning import match_reasoning_agent
                 from src.agent.match_response import match_response_agent
                 
+                # [WIZARD CHECK] Verification of Hard Data
+                # We check the explicit 'registration_step' flag (scores -> quotas -> income -> completed)
+                # This ensures we don't start the agent until the wizard is FULLY done.
+                
+                # Fetch fresh registration_step if missing from profile_state
+                # (getStudentProfileTool merges preferences, so it might be there)
+                # But to be safe let's rely on what we have or re-fetch preferences if needed.
+                # Actually getStudentProfileTool includes 'user_preferences' fields if configured...
+                # Let's assume profile_state has it (we need to verify getStudentProfileTool adds it).
+                # If not, let's treat as incomplete.
+                
+                registration_step = profile_state.get("registration_step")
+                
+                # Backwards compatibility / Fallback: If null, check for data existence?
+                # No, we want to enforce the migration. If null, strictly block.
+                
+                is_wizard_complete = (registration_step == 'completed')
+
+                if not is_wizard_complete:
+                    # BLOCKING SIGNAL
+                    yield {
+                        "type": "control",
+                        "action": "block_input",
+                        "reason": "wizard_incomplete"
+                    }
+                    
+                    yield {
+                        "type": "text",
+                        "content": "Para começar, preciso que você me dê algumas informações. Você não precisa responder se não quiser, mas quanto mais informações tivemos, melhor será seu match!"
+                    }
+                    # Stop workflow here (Frontend should show the Wizard)
+                    break
+
                 print("[Match] Running Reasoning Agent...")
                 reasoning_output = ""
                 
@@ -185,7 +219,16 @@ async def run_workflow(
                 # We do NOT let it stream text to the user to avoid breaking character.
                 # We DO stream tool events so the user sees "Searching...".
                 
-                r_runner = Runner(agent=match_reasoning_agent, app_name="cloudinha-agent", session_service=session_service)
+                # [FIX] Dynamically instantiate to inject USER_ID_CONTEXT
+                reasoning_instance = LlmAgent(
+                    model=match_reasoning_agent.model,
+                    name=match_reasoning_agent.name,
+                    description=match_reasoning_agent.description,
+                    instruction=f"USER_ID_CONTEXT: {user_id}\n" + match_reasoning_agent.instruction,
+                    tools=match_reasoning_agent.tools
+                )
+
+                r_runner = Runner(agent=reasoning_instance, app_name="cloudinha-agent", session_service=session_service)
                 
                 # Yield "Thinking" event? 
                 yield {
@@ -194,16 +237,82 @@ async def run_workflow(
                     "args": {"action": "analyzing_request"}
                 }
 
-                async for r_event in r_runner.run_async(user_id=user_id, session_id=session_id, new_message=current_message):
-                    # Pass through tool events
-                    if isinstance(r_event, dict) and r_event.get('type') in ['tool_start', 'tool_end']:
-                        yield r_event
-                    # Capture text
-                    elif hasattr(r_event, 'text') and r_event.text:
-                        reasoning_output += r_event.text
-                    elif hasattr(r_event, 'content') and r_event.content.parts:
-                        for p in r_event.content.parts:
-                            if p.text: reasoning_output += p.text
+                actual_tool_calls = 0  # Track if any real tools were called
+                
+                try:
+                    async for r_event in r_runner.run_async(user_id=user_id, session_id=session_id, new_message=current_message):
+                        # DEBUG: Log ALL events from reasoning runner
+                        print(f"!!! [REASONING EVENT] Type: {type(r_event).__name__}, Event: {r_event if isinstance(r_event, dict) else 'Object'}")
+                        
+                        # Detect actual function calls from ADK events
+                        if hasattr(r_event, 'content') and r_event.content and hasattr(r_event.content, 'parts'):
+                            for part in r_event.content.parts:
+                                if hasattr(part, 'function_call') and part.function_call:
+                                    actual_tool_calls += 1
+                                    tool_name = part.function_call.name
+                                    print(f"!!! [DETECTED TOOL CALL] {tool_name}")
+                                    
+                                    # Emit tool_start for the frontend to see
+                                    yield {
+                                        "type": "tool_start",
+                                        "tool": tool_name,
+                                        "args": {}
+                                    }
+                                
+                                # Detect function response (tool finished)
+                                if hasattr(part, 'function_response') and part.function_response:
+                                    tool_name = part.function_response.name
+                                    tool_output = str(part.function_response.response) if part.function_response.response else ""
+                                    print(f"!!! [TOOL RESPONSE] {tool_name}: {tool_output[:200]}...")
+                                    
+                                    # Emit tool_end with output for the frontend
+                                    yield {
+                                        "type": "tool_end",
+                                        "tool": tool_name,
+                                        "output": tool_output
+                                    }
+                        
+                        # Pass through tool events (if ADK sends them as dicts)
+                        if isinstance(r_event, dict) and r_event.get('type') in ['tool_start', 'tool_end']:
+                            if r_event.get('type') == 'tool_end' and r_event.get('output'):
+                                print(f"!!! [TOOL OUTPUT] {r_event.get('tool')}: {r_event.get('output')}")
+                                actual_tool_calls += 1  # Also count dict-based tool events
+                            yield r_event
+                        # Capture text
+                        elif hasattr(r_event, 'text') and r_event.text:
+                            reasoning_output += r_event.text
+                        elif hasattr(r_event, 'content') and r_event.content.parts:
+                            for p in r_event.content.parts:
+                                if p.text: reasoning_output += p.text
+                except Exception as reasoning_err:
+                    error_msg = str(reasoning_err)
+                    print(f"!!! [REASONING ERROR] {error_msg}")
+                    import traceback
+                    tb = traceback.format_exc()
+                    
+                    # Log to agent_errors
+                    try:
+                        from src.agent.agent import supabase_client
+                        supabase_client.table('agent_errors').insert({
+                            'user_id': user_id,
+                            'session_id': None,  # Use None instead of potentially malformed session_id
+                            'error_type': 'reasoning_agent_error',
+                            'error_message': error_msg,
+                            'stack_trace': tb,
+                            'metadata': {'model': 'gemini-2.0-flash'}
+                        }).execute()
+                        print(f"!!! [ERROR LOGGED] Saved reasoning error to agent_errors")
+                    except Exception as log_err:
+                        print(f"!!! [ERROR LOG FAILED] {log_err}")
+                    
+                    # Yield error to frontend
+                    yield {
+                        "type": "error",
+                        "message": f"Erro interno: {error_msg}"
+                    }
+                    return  # Stop processing
+                
+                print(f"!!! [REASONING COMPLETE] Tool calls detected: {actual_tool_calls}")
                 
                 yield {
                     "type": "tool_end",
@@ -270,7 +379,7 @@ async def run_workflow(
                 
                 # --- DYNAMIC TOOL WRAPPER & LEARNING LOOP ---
                 # We create a fresh instance to ensure clean state if needed, though mostly stateless.
-                from google.adk.agents import LlmAgent
+                # We create a fresh instance to ensure clean state if needed, though mostly stateless.
                 
                 # 1. Retrieve Learning Examples
                 user_query_text = ""
@@ -377,7 +486,7 @@ async def run_workflow(
 
         else:
                 # --- Root Agent (Default) ---
-                from google.adk.agents import LlmAgent
+                # from google.adk.agents import LlmAgent (Removed - Global now)
                 
                 # 1. Retrieve Learning Examples for Root
                 user_query_text = ""

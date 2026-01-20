@@ -62,6 +62,25 @@ def standardize_state(state_input: str) -> Optional[str]:
     
     return None
 
+
+CITY_ABBREVIATIONS = {
+    "sp": "São Paulo",
+    "rj": "Rio de Janeiro",
+    "bh": "Belo Horizonte",
+    "bsb": "Brasília",
+    "salvador": "Salvador",
+    "curitiba": "Curitiba",
+    "fortaleza": "Fortaleza",
+    "manaus": "Manaus",
+    "recife": "Recife",
+    "poa": "Porto Alegre",
+    "goiania": "Goiânia",
+    "belem": "Belém",
+    "guarulhos": "Guarulhos",
+    "campinas": "Campinas",
+    "niteroi": "Niterói"
+}
+
 def standardize_city(city_input: str) -> Optional[Dict[str, str]]:
     """
     Looks up a city in the 'cities' table and returns standardized data.
@@ -69,16 +88,30 @@ def standardize_city(city_input: str) -> Optional[Dict[str, str]]:
     """
     if not city_input:
         return None
+        
+    clean_input = city_input.strip().lower()
+    
+    # 1. Check abbreviations
+    if clean_input in CITY_ABBREVIATIONS:
+        # Map abbreviation to full name, then verify it exists in DB (or just trust it)
+        # It's better to use the full name for the lookup to get the correct state
+        expanded_name = CITY_ABBREVIATIONS[clean_input]
+        print(f"!!! [CITY ABBREVIATION] '{clean_input}' -> '{expanded_name}'")
+        city_input = expanded_name # Update input for lookup
+        
     try:
         # Exact match first
         response = supabase.table("cities").select("name, state").ilike("name", city_input.strip()).limit(1).execute()
         if response.data:
             return {"name": response.data[0]["name"], "state": response.data[0]["state"]}
         
-        # Fuzzy/partial match
-        response = supabase.table("cities").select("name, state").ilike("name", f"%{city_input.strip()}%").limit(1).execute()
-        if response.data:
-            return {"name": response.data[0]["name"], "state": response.data[0]["state"]}
+        # Fuzzy/partial match - ONLY if length > 2 to avoid "sp" -> "Aspásia"
+        if len(city_input.strip()) > 2:
+            response = supabase.table("cities").select("name, state").ilike("name", f"%{city_input.strip()}%").limit(1).execute()
+            if response.data:
+                return {"name": response.data[0]["name"], "state": response.data[0]["state"]}
+        else:
+             print(f"!!! [CITY SKIPPING FUZZY] Input '{city_input}' too short for fuzzy match")
             
     except Exception as e:
         print(f"[WARN] City lookup failed for '{city_input}': {e}")
