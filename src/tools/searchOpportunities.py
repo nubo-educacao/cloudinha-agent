@@ -145,9 +145,10 @@ def matches_quota_filter(opp_tags: list, user_quotas: List[str]) -> bool:
     return True
 
 def searchOpportunitiesTool(
+    user_id: str,
     course_name: Optional[str] = None,
     enem_score: Optional[float] = None,
-    user_id: str = "user", # Pass user_id to fetch profile fallback
+
     per_capita_income: Optional[float] = None,
     city_name: Optional[str] = None,
     city_names: Optional[List[str]] = None, # New: support multiple cities
@@ -164,6 +165,7 @@ def searchOpportunitiesTool(
     """
     Busca vagas de Sisu e Prouni usando RPC match_opportunities otimizada.
     """
+    print(f"!!! [searchOpportunitiesTool CALLED] user_id='{user_id}', course_name='{course_name}'")
     
     # 0. Sanitize Inputs
     course_name = sanitize_search_input(course_name) if course_name else ""
@@ -183,11 +185,15 @@ def searchOpportunitiesTool(
         final_state_names.append(sanitize_search_input(state_name))
 
     # 1. Fetch Profile and Preferences (Unconditional)
-    try:
-        profile = getStudentProfileTool(user_id)
-    except Exception as e:
-        print(f"[WARN] Failed to fetch profile: {e}")
-        profile = {}
+    profile = {}
+    if user_id and user_id != "user":
+        try:
+            profile = getStudentProfileTool(user_id)
+        except Exception as e:
+            print(f"[WARN] Failed to fetch profile: {e}")
+            profile = {}
+    else:
+        print(f"[WARN] Invalid or missing user_id: {user_id}. Skipping profile fetch.")
 
     # 2. Consolidate Location
     # 2. Consolidate Location & Geocoding
@@ -364,13 +370,7 @@ def searchOpportunitiesTool(
         "page_number": 0 
     }
 
-    # [PERFORMANCE] Quota-only searches are too slow - require additional filters
-    if quota_types and not course_interests and not final_city_names and not final_state_names:
-        return json.dumps({
-            "summary": "Para buscar por cotas (ex: PPI, PCD), preciso que você informe também um curso, cidade ou estado de interesse. Isso ajuda a encontrar resultados mais rápido!",
-            "results": [],
-            "needs_refinement": True
-        }, ensure_ascii=False)
+    # Search proceeds with any parameter defined - no quota-only guard needed
 
     print(f"!!! [DEBUG SEARCH] Calling RPC match_opportunities with {rpc_params}")
 
@@ -381,7 +381,24 @@ def searchOpportunitiesTool(
         error_msg = str(e)
         print(f"!!! [SEARCH ERROR] RPC failed: {error_msg}")
         
-        # Any RPC error (500, timeout, etc) - return clear internal error message
+        # Check if it's a timeout error - treat as "too broad search"
+        if "timeout" in error_msg.lower() or "57014" in error_msg:
+            refinement_msg = "A busca está muito ampla e demorou demais. Por favor, adicione mais critérios."
+            try:
+                if user_id and user_id != "user":
+                    suggestion = suggestRefinementTool(user_id, 9999)  # Fake high count for refinement
+                    if suggestion:
+                        refinement_msg = suggestion
+            except:
+                pass
+            
+            return json.dumps({
+                "summary": f"A busca foi muito ampla. {refinement_msg}",
+                "results": [],
+                "needs_refinement": True
+            }, ensure_ascii=False)
+        
+        # Other RPC errors - generic message
         return json.dumps({
             "summary": "Ocorreu um erro interno na busca. Por favor, tente novamente mais tarde ou refine a busca com cidade e curso específicos.",
             "results": [],
@@ -440,10 +457,12 @@ def searchOpportunitiesTool(
         total_opportunities_count += 1
 
     # --- PERSISTENCE: Save Found IDs to Workflow Data ---
+    print(f"!!! [PERSISTENCE DEBUG] Entering persistence block. user_id='{user_id}', processed_results count={len(processed_results)}")
     try:
         # Save even if list is empty (clears formatted results)
         if user_id and user_id != "user":
             found_ids = [r["course_id"] for r in processed_results if r.get("course_id")]
+            print(f"!!! [PERSISTENCE DEBUG] Extracted {len(found_ids)} course_ids to save.")
             
             curr = supabase.table("user_preferences").select("workflow_data").eq("user_id", user_id).execute()
             current_wf = (curr.data[0].get("workflow_data") if curr.data else {}) or {}
@@ -451,11 +470,13 @@ def searchOpportunitiesTool(
             current_wf["last_course_ids"] = found_ids
             current_wf["match_status"] = "reviewing"
             
-            supabase.table("user_preferences").update({
+            result = supabase.table("user_preferences").update({
                 "workflow_data": current_wf
             }).eq("user_id", user_id).execute()
             
-            print(f"!!! [SEARCH PERSISTENCE] Saved {len(found_ids)} course IDs to workflow_data.")
+            print(f"!!! [SEARCH PERSISTENCE] Saved {len(found_ids)} course IDs to workflow_data. Update result: {result.data}")
+        else:
+            print(f"!!! [PERSISTENCE SKIPPED] user_id is invalid or 'user': {user_id}")
 
     except Exception as e:
         print(f"!!! [SEARCH PERSISTENCE ERROR] Failed to save IDs: {e}")

@@ -117,7 +117,15 @@ O agente possui acesso a ferramentas específicas para cumprir suas funções:
 
 ## 🧠 Configuração de IA
 
-O agente está configurado para utilizar o modelo `gemini-1.5-flash` para garantir respostas rápidas e alta capacidade de raciocínio. As instruções de sistema (prompts) de cada agente ficam localizadas em `src/agent/util/`.
+A configuração de modelos é centralizada em `src/agent/config.py`:
+
+| Modelo | Uso | Descrição |
+|--------|-----|-----------|
+| `gemini-2.0-flash` | Agentes conversacionais | Modelo rápido para todos os agentes de chat |
+| `gemini-1.5-flash-8b` | Router Agent | Modelo leve para classificação de intenções |
+| `text-embedding-004` | RAG/Embeddings | Modelo de embeddings para busca semântica |
+
+As instruções de sistema (prompts) de cada agente ficam localizadas em `src/agent/util/`.
 
 ## 🚧 Melhorias Futuras (Roadmap de Robustez)
 

@@ -48,6 +48,10 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     if "per_capita_income" in updates:
         preferences_updates["family_income_per_capita"] = updates["per_capita_income"]
 
+    # Registration Step (Wizard Progress)
+    if "registration_step" in updates:
+        preferences_updates["registration_step"] = str(updates["registration_step"])
+
     # Program Preference (sisu/prouni/indiferente)
     if "program_preference" in updates:
         val = str(updates["program_preference"]).lower()
@@ -66,17 +70,111 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         elif isinstance(val, str):
             preferences_updates["quota_types"] = [v.strip() for v in val.split(",")]
     
-    # --- 2. Course Normalization ---
+    # --- 2. Course Normalization (Parse multiple courses from string) ---
+    
+    # Cache for course names from DB (avoid repeated calls)
+    _course_names_cache = None
+    
+    def get_course_names_from_db() -> List[str]:
+        """Fetch unique course names from database."""
+        nonlocal _course_names_cache
+        if _course_names_cache is not None:
+            return _course_names_cache
+        try:
+            result = supabase.rpc("get_unique_course_names").execute()
+            if result.data:
+                _course_names_cache = [r["course_name"] for r in result.data if r.get("course_name")]
+                print(f"!!! [COURSE CACHE] Loaded {len(_course_names_cache)} course names from DB")
+                return _course_names_cache
+        except Exception as e:
+            print(f"!!! [COURSE CACHE ERROR] {e}")
+        return []
+    
+    def match_course_to_database(user_input: str, course_list: List[str]) -> Optional[str]:
+        """
+        Find the best matching course name from the database.
+        Uses case-insensitive prefix/substring matching.
+        """
+        if not user_input or not course_list:
+            return None
+        
+        user_lower = user_input.lower().strip()
+        
+        # 1. Exact match (case-insensitive)
+        for course in course_list:
+            if course.lower() == user_lower:
+                return course
+        
+        # 2. Starts with match
+        for course in course_list:
+            if course.lower().startswith(user_lower):
+                return course
+        
+        # 3. Contains match (for partial names like "engenharia" -> "Engenharia Civil")
+        # Only if user input is at least 4 chars (avoid false positives)
+        if len(user_lower) >= 4:
+            for course in course_list:
+                if user_lower in course.lower():
+                    return course
+        
+        return None
+    
+    def parse_course_list(raw_value: str) -> List[str]:
+        """
+        Parse a string like "direito e filosofia" or "medicina, engenharia ou direito"
+        into a list like ["Direito", "Filosofia"] or ["Medicina", "Engenharia", "Direito"].
+        Also validates against the database course names.
+        """
+        import re
+        
+        # Normalize the input
+        clean = raw_value.strip()
+        
+        # Check for "don't know" patterns
+        lower = clean.lower()
+        if "não sei" in lower or "indeciso" in lower or "ainda não" in lower:
+            return []
+        
+        # Split by common separators: ", ", " e ", " ou ", " / ", "; "
+        # Use regex to handle variations
+        parts = re.split(r'\s*[,;/]\s*|\s+e\s+|\s+ou\s+', clean, flags=re.IGNORECASE)
+        
+        # Get course names from DB for validation
+        db_courses = get_course_names_from_db()
+        
+        # Clean up each part and validate against DB
+        courses = []
+        for part in parts:
+            stripped = part.strip()
+            if stripped and len(stripped) > 1:  # Avoid single letters
+                # Try to match with database course names
+                matched = match_course_to_database(stripped, db_courses)
+                if matched:
+                    courses.append(matched)
+                    print(f"!!! [COURSE MATCHED] '{stripped}' -> '{matched}'")
+                else:
+                    # Fallback: use Title Case if no DB match
+                    courses.append(stripped.title())
+                    print(f"!!! [COURSE FALLBACK] '{stripped}' -> '{stripped.title()}' (no DB match)")
+        
+        return courses
+
     if "course_interest" in updates:
         val = updates["course_interest"]
         if isinstance(val, str):
-            clean = val.lower().strip()
-            if "não sei" in clean or "indeciso" in clean:
-                preferences_updates["course_interest"] = []
-            else:
-                preferences_updates["course_interest"] = [val]
+            courses = parse_course_list(val)
+            preferences_updates["course_interest"] = courses
+            print(f"!!! [COURSE PARSED] '{val}' -> {courses}")
         elif isinstance(val, list):
-            preferences_updates["course_interest"] = val
+            # Also normalize list items
+            normalized = []
+            for item in val:
+                if isinstance(item, str):
+                    parsed = parse_course_list(item)
+                    normalized.extend(parsed)
+                else:
+                    normalized.append(item)
+            preferences_updates["course_interest"] = normalized
             
     if "course_name" in updates: # Legacy alias
         val = updates["course_name"]
@@ -250,17 +348,13 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
                 results["workflow_switched"] = True
 
             # EXECUTE SEARCH
+            # Note: searchOpportunitiesTool will load course_interest from profile
+            # We pass None for course_name since the profile is already updated
             print(f"!!! [AUTO SEARCH] Triggering search with: course={c_interest}, score={score}, shifts={shifts}, uni={uni_type}, state={state_pref}")
-            
-            search_course = ""
-            if isinstance(c_interest, list) and len(c_interest) > 0:
-                search_course = c_interest[0]
-            elif isinstance(c_interest, str):
-                search_course = c_interest
                 
             opportunities_json = searchOpportunitiesTool(
                 user_id=user_id,
-                course_name=search_course,
+                course_name=None,  # Let the tool load from profile to get ALL courses
                 enem_score=float(score) if score is not None else 0.0,
                 shift=shifts,
                 institution_type=uni_type,

@@ -26,11 +26,25 @@ def getStudentProfileTool(user_id: str) -> Dict:
         print(f"!!! [ERROR READ] getStudentProfileTool FAILED: {e}")
         profile_data = None
 
+    # Fetch detailed scores history
+    scores_history = []
+    try:
+        scores_response = supabase.table("user_enem_scores") \
+            .select("year, nota_linguagens, nota_ciencias_humanas, nota_ciencias_natureza, nota_matematica, nota_redacao") \
+            .eq("user_id", user_id) \
+            .order("year", desc=True) \
+            .execute()
+        
+        if scores_response and hasattr(scores_response, 'data'):
+            scores_history = scores_response.data
+    except Exception as e:
+        print(f"!!! [ERROR READ] Scores fetch failed: {e}")
+
     # Fetch user preferences
     preferences_data = None
     try:
         preferences_response = supabase.table("user_preferences") \
-            .select("enem_score, family_income_per_capita, quota_types, course_interest, location_preference, state_preference, preferred_shifts, university_preference, workflow_data, device_latitude, device_longitude, program_preference") \
+            .select("enem_score, family_income_per_capita, quota_types, course_interest, location_preference, state_preference, preferred_shifts, university_preference, workflow_data, device_latitude, device_longitude, program_preference, registration_step") \
             .eq("user_id", user_id) \
             .execute()
             
@@ -69,6 +83,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
         "age": profile_data.get("age") if profile_data else None,
         "education": profile_data.get("education") if profile_data else None,
         "enem_score": preferences_data.get("enem_score") if preferences_data else None,
+        "enem_scores_history": scores_history,
         "per_capita_income": preferences_data.get("family_income_per_capita") if preferences_data else None,
         "course_interest": preferences_data.get("course_interest") if preferences_data else None,
         "location_preference": preferences_data.get("location_preference") if preferences_data else None,
@@ -79,5 +94,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
         "program_preference": preferences_data.get("program_preference") if preferences_data else None,
         "device_latitude": preferences_data.get("device_latitude") if preferences_data else None,
         "device_longitude": preferences_data.get("device_longitude") if preferences_data else None,
-        "workflow_data": preferences_data.get("workflow_data") if preferences_data else {}
+        "device_longitude": preferences_data.get("device_longitude") if preferences_data else None,
+        "workflow_data": preferences_data.get("workflow_data") if preferences_data else {},
+        "registration_step": preferences_data.get("registration_step") if preferences_data else None
     }
