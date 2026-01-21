@@ -4,6 +4,31 @@ from src.lib.supabase import supabase
 from src.tools.searchOpportunities import searchOpportunitiesTool
 from src.tools.updateStudentProfile import standardize_city, standardize_state
 
+def get_city_coordinates_from_db(city_name: str, state_code: Optional[str] = None):
+    """
+    Get latitude and longitude for a city name using the Supabase 'cities' table.
+    """
+    if not city_name:
+        return None
+
+    try:
+        query = supabase.table("cities").select("latitude, longitude").ilike("name", city_name)
+        
+        if state_code:
+            query = query.eq("state", state_code)
+            
+        result = query.execute()
+        
+        if result.data and len(result.data) > 0:
+            # Return the first match
+            record = result.data[0]
+            return float(record['latitude']), float(record['longitude'])
+            
+    except Exception as e:
+        print(f"Error fetching coordinates for {city_name} from DB: {e}")
+    
+    return None
+
 def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     """
     Atualiza as preferências de busca do aluno (curso, nota, turno, etc.) e dispara a busca de oportunidades.
@@ -30,45 +55,29 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     preferences_updates = {}
     
     # --- 1. Score Normalization ---
+    # --- 1. Score & Income (Ignored - Managed by MatchWizard) ---
+    # We intentionally SKIP updating enem_score and family_income_per_capita here
+    # as they are now managed exclusively by the MatchWizard frontend component.
     if "enem_score" in updates:
-        raw_score = updates["enem_score"]
-        if isinstance(raw_score, str):
-            clean = raw_score.lower().strip()
-            if "não" in clean or "nao" in clean or "sem" in clean:
-                preferences_updates["enem_score"] = 0.0
-            else:
-                try:
-                    preferences_updates["enem_score"] = float(raw_score)
-                except:
-                    print(f"[WARN] Could not parse enem_score '{raw_score}', defaulting to 0")
-                    preferences_updates["enem_score"] = 0.0
-        else:
-             preferences_updates["enem_score"] = float(raw_score) if raw_score is not None else 0.0
-
+        print(f"!!! [SKIP UPDATE] enem_score update ignored (managed by Wizard): {updates['enem_score']}")
+    
     if "per_capita_income" in updates:
-        preferences_updates["family_income_per_capita"] = updates["per_capita_income"]
+        print(f"!!! [SKIP UPDATE] per_capita_income update ignored (managed by Wizard): {updates['per_capita_income']}")
 
     # Registration Step (Wizard Progress)
     if "registration_step" in updates:
         preferences_updates["registration_step"] = str(updates["registration_step"])
 
     # Program Preference (sisu/prouni/indiferente)
-    if "program_preference" in updates:
-        val = str(updates["program_preference"]).lower()
-        if "sisu" in val:
-            preferences_updates["program_preference"] = "sisu"
-        elif "prouni" in val:
-            preferences_updates["program_preference"] = "prouni"
-        else:
-            preferences_updates["program_preference"] = "indiferente"
+    # Program Preference (FORCED TO SISU/PUBLICA FOR NOW)
+    # User request: "padronizar sisu como program_preference e publica como university_preference"
+    preferences_updates["program_preference"] = "sisu"
+    preferences_updates["university_preference"] = "publica"
 
     # Quota Types
+    # Quota Types (Ignored - Managed by MatchWizard)
     if "quota_types" in updates:
-        val = updates["quota_types"]
-        if isinstance(val, list):
-            preferences_updates["quota_types"] = val
-        elif isinstance(val, str):
-            preferences_updates["quota_types"] = [v.strip() for v in val.split(",")]
+        print(f"!!! [SKIP UPDATE] quota_types update ignored (managed by Wizard): {updates['quota_types']}")
     
     # --- 2. Course Normalization (Parse multiple courses from string) ---
     
@@ -221,6 +230,14 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         if standardized:
             preferences_updates["location_preference"] = standardized["name"]
             preferences_updates["state_preference"] = standardized["state"]
+            
+            # [NEW] Resolve Lat/Long immediately and save to device_latitude/longitude
+            coords = get_city_coordinates_from_db(standardized["name"], standardized["state"])
+            if coords:
+                preferences_updates["device_latitude"] = coords[0]
+                preferences_updates["device_longitude"] = coords[1]
+                print(f"!!! [GEOCODING] Resolved {standardized['name']} -> {coords}")
+            
             print(f"!!! [PREFS CITY STANDARDIZED] '{raw_city}' -> '{standardized['name']}' ({standardized['state']})")
         else:
             preferences_updates["location_preference"] = raw_city
@@ -230,6 +247,14 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         if standardized:
             preferences_updates["location_preference"] = standardized["name"]
             preferences_updates["state_preference"] = standardized["state"]
+            
+            # [NEW] Resolve Lat/Long immediately and save to device_latitude/longitude
+            coords = get_city_coordinates_from_db(standardized["name"], standardized["state"])
+            if coords:
+                preferences_updates["device_latitude"] = coords[0]
+                preferences_updates["device_longitude"] = coords[1]
+                print(f"!!! [GEOCODING] Resolved {standardized['name']} -> {coords}")
+            
             print(f"!!! [PREFS CITY STANDARDIZED] '{raw_city}' -> '{standardized['name']}' ({standardized['state']})")
         else:
             preferences_updates["location_preference"] = raw_city
@@ -267,24 +292,10 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
             else:
                 preferences_updates["preferred_shifts"] = [normalize_shift_value(str(val))]
 
-    # --- 5. Institution Type Normalization ---
-    if "institution_type" in updates:
-        itype = str(updates["institution_type"]).lower()
-        if "púb" in itype or "pub" in itype:
-            preferences_updates["university_preference"] = "publica"
-        elif "priv" in itype:
-             preferences_updates["university_preference"] = "privada"
-        else:
-             preferences_updates["university_preference"] = "indiferente"
-    
-    if "university_preference" in updates and "university_preference" not in preferences_updates:
-        val = str(updates["university_preference"]).lower()
-        if "púb" in val or "pub" in val:
-            preferences_updates["university_preference"] = "publica"
-        elif "priv" in val:
-            preferences_updates["university_preference"] = "privada"
-        else:
-            preferences_updates["university_preference"] = "indiferente"
+    # --- 5. Institution Type Normalization (Ignored/Forced) ---
+    # We already forced 'publica' above, so we ignore other inputs here to be consistent.
+    if "institution_type" in updates or "university_preference" in updates:
+         print("!!! [SKIP UPDATE] university/institution preference forced to 'publica'.")
     
     # --- EXECUTE DB UPDATE ---
     if preferences_updates:

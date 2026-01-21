@@ -1,148 +1,13 @@
-import re
 import json
 from typing import Optional, List, Set, Dict, Union
 from src.lib.supabase import supabase
-# from geopy.geocoders import Nominatim (Removed)
-# from geopy.exc import GeocoderTimedOut (Removed)
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.suggestRefinement import suggestRefinementTool
-from src.tools.updateStudentProfile import standardize_state
 
 
-# Constants for Income Logic
-SALARIO_MINIMO = 1621.0
-RENDA_INTEGRAL_THRESHOLD = 1.5 * SALARIO_MINIMO  # 2431.50
-RENDA_PARCIAL_THRESHOLD = 3.0 * SALARIO_MINIMO   # 4863.00
 
-TAGS_RENDA = {
-    'INTEGRAL', 'PARCIAL', 
-    'RENDA_ATE_1_SM', 'RENDA_ATE_1_5_SM', 
-    'RENDA_ATE_2_SM', 'RENDA_ATE_4_SM'
-}
 
-def sanitize_search_input(text: str) -> str:
-    """
-    Sanitize input string by removing potentially dangerous characters.
-    Allows alphanumeric, spaces, hyphens, periods, and accents.
-    """
-    if not text:
-        return ""
-    # Keep only safe characters: letters (including unicode), numbers, spaces, - and .
-    return re.sub(r'[^a-zA-ZÀ-ÿ0-9\s\-\.]', '', text)
 
-def get_city_coordinates_from_db(city_name: str, state_code: Optional[str] = None):
-    """
-    Get latitude and longitude for a city name using the Supabase 'cities' table.
-    """
-    if not city_name:
-        return None
-
-    try:
-        query = supabase.table("cities").select("latitude, longitude").ilike("name", city_name)
-        
-        if state_code:
-            query = query.eq("state", state_code)
-            
-        result = query.execute()
-        
-        if result.data and len(result.data) > 0:
-            # Return the first match (usually accurate enough if state is provided)
-            record = result.data[0]
-            return float(record['latitude']), float(record['longitude'])
-            
-    except Exception as e:
-        print(f"Error fetching coordinates for {city_name} from DB: {e}")
-    
-    return None
-
-def normalize_shift(shift_value: str) -> str:
-    """Normaliza valores de turno, tratando EAD como equivalente."""
-    if not shift_value:
-        return ""
-    
-    lower = shift_value.lower().strip()
-    
-    # Normalizar EAD
-    if 'ead' in lower or 'distância' in lower or 'distancia' in lower:
-        return 'EAD'
-    
-    # Capitalizar outros turnos
-    shift_map = {
-        'matutino': 'Matutino',
-        'vespertino': 'Vespertino',
-        'noturno': 'Noturno',
-        'integral': 'Integral'
-    }
-    return shift_map.get(lower, shift_value.capitalize())
-
-def get_excluded_tags_by_income(income: float) -> Set[str]:
-    """Retorna tags que devem ser excluídas baseado na renda."""
-    if income is None:
-        return set()
-    
-    excluded = set()
-    
-    if income > RENDA_PARCIAL_THRESHOLD:  # > 3 SM
-        excluded.update(['INTEGRAL', 'PARCIAL', 'RENDA_ATE_1_SM', 
-                        'RENDA_ATE_1_5_SM', 'RENDA_ATE_2_SM'])
-    elif income > RENDA_INTEGRAL_THRESHOLD:  # > 1.5 SM
-        excluded.update(['INTEGRAL', 'RENDA_ATE_1_SM', 'RENDA_ATE_1_5_SM'])
-    elif income > 2 * SALARIO_MINIMO:  # > 2 SM
-        excluded.update(['RENDA_ATE_1_SM', 'RENDA_ATE_1_5_SM', 'RENDA_ATE_2_SM'])
-    elif income > SALARIO_MINIMO:  # > 1 SM
-        excluded.update(['RENDA_ATE_1_SM'])
-    
-    return excluded
-
-def should_exclude_by_income(opp_tags: list, excluded: Set[str]) -> bool:
-    """Verifica se oportunidade deve ser excluída por renda."""
-    if not excluded or not opp_tags:
-        return False
-    
-    # opp_tags é JSONB: [[tag1, tag2], [tag3]]
-    for tag_group in opp_tags:
-        if isinstance(tag_group, list):
-            # Se TODOS os tags importantes do grupo são de renda excluída, exclui o grupo
-            # Mas cuidado: um grupo pode ter [AMPLA, INTEGRAL]. Se excluir INTEGRAL, sobra AMPLA?
-            # A lógica original do Match diz: Tags são cumulativas para a vaga. 
-            # Se a vaga pede (RENDA_ATE_1_SM E PPI), e user tem renda alta -> Exclui.
-            
-            # Simplificação segura: Se o grupo contem ALGUMA tag de renda que o usuario NAO atende
-            # E essa tag é restritiva (exige renda baixa), então esse grupo não serve.
-            # Se a oportunidade só tem grupos inválidos, ela é excluída.
-             
-            # Aqui estamos validando SE a oportunidade deve ser excluída.
-            # Se o grupo tem uma tag Excluída, esse grupo é invalido.
-            pass
-
-    # Simplified Logic: Check if ANY valid group remains.
-    # If all groups are invalid, return True (Exclude).
-    
-    has_valid_group = False
-    for tag_group in opp_tags:
-        if isinstance(tag_group, list):
-            # Check if this group is valid
-            group_is_invalid = any(tag in excluded for tag in tag_group)
-            if not group_is_invalid:
-                has_valid_group = True
-                break
-                
-    return not has_valid_group
-
-def matches_quota_filter(opp_tags: list, user_quotas: List[str]) -> bool:
-    """Verifica se oportunidade atende às cotas do usuário."""
-    if not user_quotas:
-        return True  # Sem filtro explicito de cotas = aceita tudo (ou agente decide)
-        # Note: Se o user não passou cotas, assumimos que ele quer ver tudo ou o RPC já filtrou o básico.
-        # Mas para ser seguro, se user nao tem cotas, ele só deveria ver Ampla? 
-        # Geralmente sim. Mas se o parametro quota_types veio vazio, o RPC traz tudo.
-        # Vamos manter permissivo aqui e deixar o RPC ou o user decidir.
-    
-    # O RPC 'match_opportunities' já faz filtro de inclusão:
-    # (quota_types IS NULL ... OR EXISTS ... (AMPLA OR user_quota))
-    # Então aqui no Python é só double-check se precisarmos.
-    # Mas como o RPC retorna, vamos confiar no RPC para a "Inclusão".
-    return True
 
 def searchOpportunitiesTool(
     user_id: str,
@@ -167,22 +32,21 @@ def searchOpportunitiesTool(
     """
     print(f"!!! [searchOpportunitiesTool CALLED] user_id='{user_id}', course_name='{course_name}'")
     
-    # 0. Sanitize Inputs
-    course_name = sanitize_search_input(course_name) if course_name else ""
+    # 0. Inputs are assumed to be sanitized by updateStudentPreferences
     
     # Consolidate Cities
     final_city_names = []
     if city_names:
-        final_city_names.extend([sanitize_search_input(c) for c in city_names if c])
+        final_city_names.extend([c for c in city_names if c])
     if city_name:
-        final_city_names.append(sanitize_search_input(city_name))
+        final_city_names.append(city_name)
 
     # Consolidate States
     final_state_names = []
     if state_names:
-        final_state_names.extend([sanitize_search_input(s) for s in state_names if s])
+        final_state_names.extend([s for s in state_names if s])
     if state_name:
-        final_state_names.append(sanitize_search_input(state_name))
+        final_state_names.append(state_name)
 
     # 1. Fetch Profile and Preferences (Unconditional)
     profile = {}
@@ -198,35 +62,43 @@ def searchOpportunitiesTool(
     # 2. Consolidate Location
     # 2. Consolidate Location & Geocoding
     # Priority:
-    # A. If City provided -> Try to resolve Coords from DB -> If Found, Use Coords + Clear City Filter (Proximity Search)
-    # B. If No City but Device Location -> Use Device Location
+    # If device/preference Lat/Long provided -> Use Coordinate Search (Proximity) and DISABLE text filter
+    # If no Lat/Long -> Use city/state text filter
     
-    is_proximity_search = False
+    # Check if we have coordinates from profile (which now includes preferences geolocation)
+    if user_lat is None and profile.get("device_latitude"):
+        try:
+             user_lat = float(profile["device_latitude"])
+             if profile.get("device_longitude"):
+                 user_long = float(profile["device_longitude"])
+        except:
+             pass
+
+    # !!! CRITICAL LOGIC !!!
+    # If we have coordinates, we assume the user wants proximity search centered on these coordinates.
+    # To enable SQL proximity search order, we MUST clear the text-based city/state filter.
+    # The only exception is if the user EXPLICITLY provided city_names to THIS tool call (overriding preferences),
+    # but currently we assume preference-based flow.
+    # (If city_names is passed as ARGUMENT, it overrides. If it came from preferences, we drop it in favor of coords)
     
-    # Try to resolve coordinates from the first requested city
-    if final_city_names:
-        target_city = final_city_names[0]
-        # Try to find a hint for the state to disambiguate
-        target_state = final_state_names[0] if final_state_names else None
-        
-        coords = get_city_coordinates_from_db(target_city, target_state)
-        
-        if coords:
-            print(f"[DEBUG] Resolved {target_city} to {coords}. Switch to PROXIMITY SEARCH.")
-            user_lat, user_long = coords
-            # !!! CRITICAL CHANGE !!!
-            # Clear text filters to allow returning results from neighboring cities
-            final_city_names = None 
-            final_state_names = None 
-            is_proximity_search = True
-        else:
-            print(f"[DEBUG] Could not resolve coordinates for {target_city}. Fallback to TEXT FILTER.")
+    # We differentiate: `city_names` arg vs `profile["location_preference"]` logic
+    # In Step 0, `final_city_names` was built.
+    # If `final_city_names` matches the preference city, AND we have coords, we drop the text filter.
     
-    # Fallback to Device Location if not searching for a specific city
-    if (user_lat is None or user_long is None) and not is_proximity_search:
-        if profile.get("device_latitude") and profile.get("device_longitude"):
-            user_lat = float(profile["device_latitude"])
-            user_long = float(profile["device_longitude"])
+    if user_lat is not None and user_long is not None:
+         # Check if we should enforce proximity
+         # If the gathered cities are just the preference one, we switch to proximity
+         is_preference_city = False
+         pref_city = profile.get("location_preference")
+         if final_city_names and pref_city and len(final_city_names) == 1 and final_city_names[0] == pref_city:
+             is_preference_city = True
+             
+         if not final_city_names or is_preference_city:
+             print(f"[DEBUG] Using Lat/Long ({user_lat}, {user_long}) for Proximity Search. Clearing text filters.")
+             final_city_names = None
+             final_state_names = None
+    else:
+         print(f"[DEBUG] No Lat/Long available. Using Text Search: {final_city_names}")
             
     # 3. Consolidate Filters (Prioritize Profile/Preferences)
     if per_capita_income is None:
@@ -242,44 +114,11 @@ def searchOpportunitiesTool(
 
     # [FIX] Always load Location from preferences (location_preference > registered_city)
     if not final_city_names and profile.get("location_preference"):
-         final_city_names.append(sanitize_search_input(profile.get("location_preference")))
+         final_city_names.append(profile.get("location_preference"))
     
     # [FIX] Always load State from preferences
     if not final_state_names and profile.get("state_preference"):
-         final_state_names.append(sanitize_search_input(profile.get("state_preference")))
-    
-    # [FIX] Handle Common Abbreviations (Simple Mapping)
-    CITY_ABBREVIATIONS = {
-        "sp": "São Paulo",
-        "rj": "Rio de Janeiro",
-        "bh": "Belo Horizonte",
-        "df": "Brasília",
-        "bsb": "Brasília"
-    }
-
-    # Expand/Map cities (Only if we are using text search)
-    mapped_cities = []
-    if final_city_names:
-        for city in final_city_names:
-            lower_city = city.lower().strip()
-            if lower_city in CITY_ABBREVIATIONS:
-                 mapped_cities.append(CITY_ABBREVIATIONS[lower_city])
-            else:
-                 mapped_cities.append(city)
-        final_city_names = list(set(mapped_cities))
-    
-    # States: Normalize to UF codes using standardize_state
-    normalized_states = []
-    if final_state_names:
-        for s in final_state_names:
-            if s:
-                normalized = standardize_state(s.strip())
-                if normalized:
-                    normalized_states.append(normalized)
-                else:
-                    # Fallback: keep as uppercase if not found in DB
-                    normalized_states.append(s.strip().upper())
-    final_state_names = list(set(normalized_states))
+         final_state_names.append(profile.get("state_preference"))
 
     # 4. Consolidate Course Interests
     # Get interests from profile
@@ -288,7 +127,7 @@ def searchOpportunitiesTool(
     # Function allows explicit course_name override/addition
     course_interests = []
     if course_name:
-        course_interests.append(sanitize_search_input(course_name))
+        course_interests.append(course_name)
     
     # Add profile interests if available
     if profile_interests:
@@ -301,7 +140,6 @@ def searchOpportunitiesTool(
     course_interests = list(set(c for c in course_interests if c))
 
     # Normalize Shifts
-    # [FIX] Merge/Use saved shifts
     saved_shifts = profile.get("preferred_shifts") or []
     
     current_shifts = []
@@ -313,44 +151,20 @@ def searchOpportunitiesTool(
     
     # Combine current arg shifts with saved shifts
     # (Assuming we want to match ANY preference)
-    all_shifts = list(set(current_shifts + saved_shifts))
-    
-    normalized_shifts = []
-    for s in all_shifts:
-        norm = normalize_shift(s)
-        if norm:
-            normalized_shifts.append(norm)
-    
-    # Remove duplicates
-    normalized_shifts = list(set(normalized_shifts))
+    normalized_shifts = list(set(current_shifts + saved_shifts))
 
     # Normalize Program Preference
     # If not provided arg, check profile
-    if not program_preference and not institution_type:
+    if not program_preference:
         program_preference = profile.get("program_preference")
         
     # [FIX] Consolidate University Preference
     if not university_preference:
         university_preference = profile.get("university_preference")
-
-    if not program_preference and institution_type:
-        itype = institution_type.lower()
-        if "púb" in itype or "pub" in itype or "sisu" in itype:
-            program_preference = 'sisu'
-        elif "priv" in itype or "prouni" in itype:
-            program_preference = 'prouni'
-    elif program_preference:
-        program_preference = program_preference.lower()
-        if "sisu" in program_preference:
-            program_preference = "sisu"
-        elif "prouni" in program_preference:
-            program_preference = "prouni"
     
     # 5. Prepare RPC Parameters
-    # [FIX] If searching for Prouni, ignore Sisu-specific quota tags like 'ESCOLA_PUBLICA'
-    # which might block results if the Prouni dataset doesn't use them.
-    if program_preference == 'prouni':
-        quota_types = None
+    # [FIXED] Removed logic that cleared quota_types for Prouni.
+    # We now respect user's selected quotas (even for Prouni) + Ampla Concorrência Logic is handled by SQL.
 
     page_size = 2880
     

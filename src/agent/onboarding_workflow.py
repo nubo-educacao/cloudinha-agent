@@ -3,13 +3,13 @@ from google.adk.agents import LlmAgent
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.logModeration import logModerationTool
-from src.agent.agent import MODEL
+from src.agent.config import MODEL_ONBOARDING
 from src.agent.utils import load_instruction_from_file
 
 # --- Single Onboarding Agent ---
 
 onboarding_agent = LlmAgent(
-    model=MODEL,
+    model=MODEL_ONBOARDING,
     name="onboarding_agent",
     description="Coleta os dados do perfil do usuário em uma conversa fluida.",
     instruction=load_instruction_from_file("onboarding_agent_instruction.txt") + "\n\n" + load_instruction_from_file("persona.txt"),
