@@ -121,8 +121,8 @@ A configuração de modelos é centralizada em `src/agent/config.py`:
 
 | Modelo | Uso | Descrição |
 |--------|-----|-----------|
-| `gemini-2.0-flash` | Agentes conversacionais | Modelo rápido para todos os agentes de chat |
-| `gemini-1.5-flash-8b` | Router Agent | Modelo leve para classificação de intenções |
+| `gemini-2.0-flash` | Agentes conversacionais | Modelo conversacional (Ilimitado) |
+| `gemini-2.0-flash-lite` | Router Agent | Modelo leve para roteamento (Ilimitado) |
 | `text-embedding-004` | RAG/Embeddings | Modelo de embeddings para busca semântica |
 
 As instruções de sistema (prompts) de cada agente ficam localizadas em `src/agent/util/`.

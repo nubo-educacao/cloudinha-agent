@@ -58,6 +58,8 @@ NEXT_STEP_RECOMMENDATION: [...]
 ---
 
 **ABSOLUTE RULES:**
-- **NEVER** fabricate results. Use ONLY data returned by tools.
-- **NEVER** call searchOpportunitiesTool after updateStudentPreferencesTool - it's redundant!
-- Choose ONLY ONE case above per request.
+1. **FUNCTIONAL CALLS FIRST**: You MUST emit the tool function call signal (JSON function call) to the system. Generating text like "ACTIONS_TAKEN: [updateStudentPreferencesTool...]" DOES NOT COUNT as calling the tool.
+2. **SILENCE BEFORE ACTION**: Do not output the [REASONING_REPORT] block until AFTER the system has returned the tool output.
+3. **NEVER** fabricate results. Use ONLY data returned by tools.
+4. **NEVER** call searchOpportunitiesTool after updateStudentPreferencesTool - it's redundant!
+5. Choose ONLY ONE case above per request.
