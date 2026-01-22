@@ -113,11 +113,13 @@ def searchOpportunitiesTool(
         enem_score = float(profile["enem_score"])
 
     # [FIX] Always load Location from preferences (location_preference > registered_city)
-    if not final_city_names and profile.get("location_preference"):
+    # Skip if final_city_names is None (means we're using proximity search)
+    if final_city_names is not None and len(final_city_names) == 0 and profile.get("location_preference"):
          final_city_names.append(profile.get("location_preference"))
     
     # [FIX] Always load State from preferences
-    if not final_state_names and profile.get("state_preference"):
+    # Skip if final_state_names is None (means we're using proximity search)
+    if final_state_names is not None and len(final_state_names) == 0 and profile.get("state_preference"):
          final_state_names.append(profile.get("state_preference"))
 
     # 4. Consolidate Course Interests
@@ -244,61 +246,53 @@ def searchOpportunitiesTool(
             "results": []
         }, ensure_ascii=False)
 
-    # 2. Process Results (Python Side)
-    # NOTE: The RPC now returns FLAT records (one per course group), not nested opportunities_json
-    processed_results = []
-    total_opportunities_count = 0
+    # 3. Aggregation & Persistence
+    # Group results by Course ID to build the Match Map
+    match_map = {}
+    unique_course_ids = []
+    
+    for row in courses:
+        c_id = row.get("course_id")
+        o_id = row.get("opportunity_id")
+        
+        if c_id:
+             if c_id not in match_map:
+                 match_map[c_id] = []
+                 unique_course_ids.append(c_id) # Sustain order
+             
+             if o_id:
+                 match_map[c_id].append(o_id)
 
-    for course in courses:
-        # Each course record IS the opportunity data (already aggregated by RPC)
-        # No more opportunities_json iteration needed
-        
-        course_shift = course.get("shift", "")
-        course_type = course.get("opportunity_type", "")
-        course_cutoff = course.get("cutoff_score")
-        
-        # Build Output Object
-        processed_results.append({
-            "course": course.get("course_name"),
-            "institution": course.get("institution_name"),
-            "location": f"{course.get('campus_city')} - {course.get('campus_state')}" + (f" ({course.get('distance_km'):.1f}km)" if course.get('distance_km') is not None else ""),
-            "opportunities_count": 1,  # Each record is one grouped opportunity
-            "types": [course_type] if course_type else [],
-            "shifts": [course_shift] if course_shift else [],
-            "best_cutoff": float(course_cutoff) if course_cutoff is not None else None,
-            "course_id": course.get("course_id") 
-        })
-        total_opportunities_count += 1
+    # Deduplicate Opportunity IDs per course
+    for c_id in match_map:
+        match_map[c_id] = list(set(match_map[c_id]))
 
     # --- PERSISTENCE: Save Found IDs to Workflow Data ---
-    print(f"!!! [PERSISTENCE DEBUG] Entering persistence block. user_id='{user_id}', processed_results count={len(processed_results)}")
+    print(f"!!! [PERSISTENCE DEBUG] Entering persistence block. user_id='{user_id}', unique courses={len(unique_course_ids)}")
     try:
         # Save even if list is empty (clears formatted results)
         if user_id and user_id != "user":
-            found_ids = [r["course_id"] for r in processed_results if r.get("course_id")]
-            print(f"!!! [PERSISTENCE DEBUG] Extracted {len(found_ids)} course_ids to save.")
-            
             curr = supabase.table("user_preferences").select("workflow_data").eq("user_id", user_id).execute()
             current_wf = (curr.data[0].get("workflow_data") if curr.data else {}) or {}
             
-            current_wf["last_course_ids"] = found_ids
+            current_wf["last_course_ids"] = unique_course_ids
+            current_wf["last_opportunity_map"] = match_map # Validation: New Field
             current_wf["match_status"] = "reviewing"
             
             result = supabase.table("user_preferences").update({
                 "workflow_data": current_wf
             }).eq("user_id", user_id).execute()
             
-            print(f"!!! [SEARCH PERSISTENCE] Saved {len(found_ids)} course IDs to workflow_data. Update result: {result.data}")
+            print(f"!!! [SEARCH PERSISTENCE] Saved {len(unique_course_ids)} course IDs and Map to workflow_data.")
         else:
             print(f"!!! [PERSISTENCE SKIPPED] user_id is invalid or 'user': {user_id}")
 
     except Exception as e:
         print(f"!!! [SEARCH PERSISTENCE ERROR] Failed to save IDs: {e}")
 
-    # 3. Create Final Output (CONCISE for Agent)
-    # Return ONLY the count summary. No results list to save tokens.
-    
-    courses_count = len(processed_results)
+    # 4. Create Final Output (CONCISE for Agent)
+    courses_count = len(unique_course_ids)
+    total_opportunities_count = sum(len(v) for v in match_map.values())
     
     if courses_count == 0:
          return json.dumps({
