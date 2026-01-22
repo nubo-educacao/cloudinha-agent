@@ -281,9 +281,9 @@ async def run_workflow(
                         # Capture text
                         elif hasattr(r_event, 'text') and r_event.text:
                             reasoning_output += r_event.text
-                        elif hasattr(r_event, 'content') and r_event.content.parts:
+                        elif hasattr(r_event, 'content') and r_event.content and hasattr(r_event.content, 'parts') and r_event.content.parts:
                             for p in r_event.content.parts:
-                                if p.text: reasoning_output += p.text
+                                if hasattr(p, 'text') and p.text: reasoning_output += p.text
                 except Exception as reasoning_err:
                     error_msg = str(reasoning_err)
                     print(f"!!! [REASONING ERROR] {error_msg}")
