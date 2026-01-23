@@ -94,9 +94,9 @@ def searchOpportunitiesTool(
              is_preference_city = True
              
          if not final_city_names or is_preference_city:
-             print(f"[DEBUG] Using Lat/Long ({user_lat}, {user_long}) for Proximity Search. Clearing text filters.")
+             print(f"[DEBUG] Using Lat/Long ({user_lat}, {user_long}) for Proximity Search. Clearing city filter only.")
              final_city_names = None
-             final_state_names = None
+             # NOTE: Keep final_state_names - user's state preference should still apply
     else:
          print(f"[DEBUG] No Lat/Long available. Using Text Search: {final_city_names}")
             
@@ -171,8 +171,9 @@ def searchOpportunitiesTool(
     page_size = 2880
     
     rpc_params = {
+        "p_user_id": user_id,  # NEW: Backend fetches ENEM scores and calculates weighted average
         "course_interests": course_interests if course_interests else None,
-        "enem_score": float(enem_score) if enem_score else None,
+        # enem_score REMOVED - backend uses p_user_id to fetch and calculate
         "income_per_capita": float(per_capita_income) if per_capita_income is not None else None,
         "quota_types": quota_types if quota_types else None,
         "preferred_shifts": normalized_shifts if normalized_shifts else None,
@@ -181,7 +182,7 @@ def searchOpportunitiesTool(
         "user_long": user_long,
         "city_names": final_city_names if final_city_names else None,
         "state_names": final_state_names if final_state_names else None,
-        "university_preference": None,  # Always pass None - filter not implemented in RPC yet
+        # university_preference REMOVED from RPC signature
         "page_size": page_size,
         "page_number": 0 
     }
