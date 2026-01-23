@@ -25,21 +25,24 @@ def suggestRefinementTool(user_id: str, result_count: int) -> str:
 
     # Logic: Suggest refinement until we have <= 12 results
     
-    # Priority 1: Too many results? Suggest location or institution type
+    # Priority 1: COURSE (Most impactful filter - prevents timeout!)
+    if not state.get("course_interest") and result_count > 12:
+        return "SUGGESTION: Ask for course interest. Content: 'Para qual curso você gostaria de buscar? Me diz um ou mais cursos!'"
+    
+    # Priority 2: Location - STATE before City (more common refinement)
     if result_count > 12:
+        if not state.get("state_preference"):
+            return "SUGGESTION: Ask for state preference. Content: 'Quer filtrar por algum estado específico? (ex: São Paulo, Minas Gerais)'"
+        
         if not state.get("location_preference"):
-            return "SUGGESTION: Ask the user if they want to filter by a specific city. Content: 'Encontrei muitos resultados! Quer filtrar por alguma cidade específica?'"
+            return "SUGGESTION: Ask the user if they want to filter by a specific city. Content: 'Quer filtrar por alguma cidade específica?'"
             
         if not state.get("university_preference") or state.get("university_preference") == "indiferente":
              return "SUGGESTION: Ask preference for Public vs Private. Content: 'Prefere faculdades públicas ou privadas?'"
     
-    # Priority 2: Missing income for Prouni eligibility (only if still > 12)
+    # Priority 3: Missing income for Prouni eligibility (only if still > 12)
     if not state.get("per_capita_income") and result_count > 12:
         return "SUGGESTION: Ask for income to check Prouni eligibility. Content: 'Para ver quais bolsas Prouni você é elegível (100% ou 50%), me diz sua renda per capita familiar?'"
-    
-    # Priority 3: Very broad search (no course specified)
-    if not state.get("course_interest") and result_count > 12:
-        return "SUGGESTION: Ask for course interest. Content: 'Estou buscando em todas as áreas. Você tem algum curso em mente?'"
     
     # Priority 4: Still > 12 results - suggest shift or another filter
     if result_count > 12:

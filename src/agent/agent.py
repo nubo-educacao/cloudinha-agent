@@ -10,12 +10,13 @@ from src.tools.readRulesTool import readRulesTool
 from src.tools.smartResearch import smartResearchTool
 from src.tools.duckDuckGoSearch import duckDuckGoSearchTool
 from .utils import load_instruction_from_file
+from .config import MODEL_CHAT
 
 load_dotenv()
 
 
-
-MODEL="gemini-2.0-flash"
+# Use centralized config for model selection
+MODEL = MODEL_CHAT
 
 
 

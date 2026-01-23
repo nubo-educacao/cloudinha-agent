@@ -1,5 +1,5 @@
 from google.adk.agents import LlmAgent
-from src.agent.agent import MODEL
+from src.agent.config import MODEL_ROUTER
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.getStudentProfile import getStudentProfileTool
 
@@ -96,7 +96,7 @@ Você NÃO deve conversar. Apenas retorne um JSON estrito:
 """
 
 router_agent = LlmAgent(
-    model="gemini-2.0-flash", # Fast model strictly for routing
+    model=MODEL_ROUTER,  # Lightweight model for fast intent classification
     name="router_agent",
     description="Classifies user intent to route to the correct workflow.",
     instruction=ROUTER_INSTRUCTION,

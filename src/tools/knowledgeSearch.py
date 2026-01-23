@@ -34,10 +34,11 @@ async def knowledgeSearchTool(query: str, collection_name: str = "documents") ->
     try:
 
         # 1. Generate Embedding (Async)
-        print(f"[DEBUG RAG] Generating embedding (Async) using models/embedding-001 for: '{query}'...", flush=True)
+        # Using text-embedding-004 (recommended) instead of legacy embedding-001
+        print(f"[DEBUG RAG] Generating embedding (Async) using text-embedding-004 for: '{query}'...", flush=True)
         
         response = await client.aio.models.embed_content(
-            model="models/embedding-001",
+            model="models/text-embedding-004",
             contents=query
         )
         

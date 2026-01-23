@@ -1,6 +1,7 @@
 from src.tools.knowledgeSearch import knowledgeSearchTool
 from src.tools.duckDuckGoSearch import duckDuckGoSearchTool
 from src.tools.readRulesTool import readRulesTool
+from src.agent.config import MODEL_CHAT
 from google.genai import Client
 import os
 import logging
@@ -8,8 +9,8 @@ import asyncio
 
 logger = logging.getLogger("cloudinha-server")
 
-# Initialize client for verification
-VERIFICATION_MODEL = "gemini-2.0-flash" 
+# Initialize client for verification (currently unused, kept for future use)
+VERIFICATION_MODEL = MODEL_CHAT 
 
 async def smartResearchTool(query: str, collection_name: str = "documents") -> str:
     """
