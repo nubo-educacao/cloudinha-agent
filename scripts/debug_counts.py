@@ -1,14 +1,14 @@
 import os
+import sys
 import asyncio
-from supabase import create_client, Client
+import time
 
-# Manually set credentials from .env.local
-url: str = "https://aifzkybxhmefbirujvdg.supabase.co"
-key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFpZnpreWJ4aG1lZmJpcnVqdmRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1OTI5MjUsImV4cCI6MjA4NDE2ODkyNX0.YCnij78ps2si_zl_yT-XGcd9RpOjOht-u04ppSAbpM0"
+# Add root directory to sys.path to allow imports from src
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.lib.supabase import supabase
 
 async def main():
-    supabase: Client = create_client(url, key)
-
     print("--- Opportunity Counts ---")
     try:
         # Count Sisu 2026
@@ -25,10 +25,6 @@ async def main():
         print(f"Error counting Prouni 2025: {e}")
 
     print("\n--- Checking Indexes (via RPC if possible, else infer from behavior) ---")
-    # We can't query pg_indexes directly via PostgREST unless exposed.
-    # Instead, we'll try a search query and time it.
-    
-    import time
     
     start = time.time()
     print("Testing Sisu Search (limit 1)...")
@@ -39,7 +35,6 @@ async def main():
             'page_size': 1
         }).execute()
         print(f"Sisu Search Time: {time.time() - start:.2f}s")
-        # print(f"Result count: {len(res.data)}") 
     except Exception as e:
         print(f"Sisu Search Failed/Timed Out: {e}")
 

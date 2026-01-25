@@ -1,14 +1,13 @@
 import os
+import sys
 import asyncio
-from supabase import create_client, Client
 
-# Manually set credentials from .env.local
-url: str = "https://aifzkybxhmefbirujvdg.supabase.co"
-key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFpZnpreWJ4aG1lZmJpcnVqdmRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1OTI5MjUsImV4cCI6MjA4NDE2ODkyNX0.YCnij78ps2si_zl_yT-XGcd9RpOjOht-u04ppSAbpM0"
+# Add root directory to sys.path to allow imports from src
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.lib.supabase import supabase
 
 async def main():
-    supabase: Client = create_client(url, key)
-
     print("--- Sampling Campus States ---")
     try:
         # Get distinct states

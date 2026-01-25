@@ -1,19 +1,4 @@
-import os
-import json
-from dotenv import load_dotenv
-from supabase import create_client
-
-# Load environment variables
-load_dotenv()
-
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
-
-if not supabase_url or not supabase_key:
-    print("Error: Missing SUPABASE_URL or SUPABASE_SERVICE_KEY/SUPABASE_KEY in .env")
-    exit(1)
-
-supabase = create_client(supabase_url, supabase_key)
+from src.lib.supabase import supabase
 
 USER_ID = '6f6bf62b-cb16-41ec-a228-243ad7e3ce1b'
 

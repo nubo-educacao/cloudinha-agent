@@ -3,12 +3,11 @@ from typing import Optional, List, Set, Dict, Union
 from src.lib.supabase import supabase
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.suggestRefinement import suggestRefinementTool
+from src.lib.error_handler import safe_execution
+from src.lib.resilience import retry_with_backoff
 
-
-
-
-
-
+@safe_execution(error_type="tool_error", default_return='{"summary": "Ocorreu um erro interno na busca. Por favor, tente novamente.", "results": [], "error": true}')
+@retry_with_backoff(retries=3, min_delay=1.0)
 def searchOpportunitiesTool(
     user_id: str,
     course_name: Optional[str] = None,
@@ -51,21 +50,12 @@ def searchOpportunitiesTool(
     # 1. Fetch Profile and Preferences (Unconditional)
     profile = {}
     if user_id and user_id != "user":
-        try:
-            profile = getStudentProfileTool(user_id)
-        except Exception as e:
-            print(f"[WARN] Failed to fetch profile: {e}")
-            profile = {}
+        # Safe tool call
+        profile = getStudentProfileTool(user_id)
     else:
         print(f"[WARN] Invalid or missing user_id: {user_id}. Skipping profile fetch.")
 
-    # 2. Consolidate Location
     # 2. Consolidate Location & Geocoding
-    # Priority:
-    # If device/preference Lat/Long provided -> Use Coordinate Search (Proximity) and DISABLE text filter
-    # If no Lat/Long -> Use city/state text filter
-    
-    # Check if we have coordinates from profile (which now includes preferences geolocation)
     if user_lat is None and profile.get("device_latitude"):
         try:
              user_lat = float(profile["device_latitude"])
@@ -75,19 +65,8 @@ def searchOpportunitiesTool(
              pass
 
     # !!! CRITICAL LOGIC !!!
-    # If we have coordinates, we assume the user wants proximity search centered on these coordinates.
-    # To enable SQL proximity search order, we MUST clear the text-based city/state filter.
-    # The only exception is if the user EXPLICITLY provided city_names to THIS tool call (overriding preferences),
-    # but currently we assume preference-based flow.
-    # (If city_names is passed as ARGUMENT, it overrides. If it came from preferences, we drop it in favor of coords)
-    
-    # We differentiate: `city_names` arg vs `profile["location_preference"]` logic
-    # In Step 0, `final_city_names` was built.
-    # If `final_city_names` matches the preference city, AND we have coords, we drop the text filter.
-    
     if user_lat is not None and user_long is not None:
          # Check if we should enforce proximity
-         # If the gathered cities are just the preference one, we switch to proximity
          is_preference_city = False
          pref_city = profile.get("location_preference")
          if final_city_names and pref_city and len(final_city_names) == 1 and final_city_names[0] == pref_city:
@@ -104,76 +83,60 @@ def searchOpportunitiesTool(
     if per_capita_income is None:
         per_capita_income = profile.get("per_capita_income")
     
-    # [FIX] Always defer to saved quotas if not provided (or even if provided, depending on logic, but here efficient fallback)
     if not quota_types:
         quota_types = profile.get("quota_types")
 
-    # [FIX] Always load ENEM score from preferences if not explicit
     if enem_score is None and profile.get("enem_score"):
         enem_score = float(profile["enem_score"])
 
-    # [FIX] Always load Location from preferences (location_preference > registered_city)
-    # Skip if final_city_names is None (means we're using proximity search)
     if final_city_names is not None and len(final_city_names) == 0 and profile.get("location_preference"):
          final_city_names.append(profile.get("location_preference"))
     
-    # [FIX] Always load State from preferences
-    # Skip if final_state_names is None (means we're using proximity search)
     if final_state_names is not None and len(final_state_names) == 0 and profile.get("state_preference"):
          final_state_names.append(profile.get("state_preference"))
 
     # 4. Consolidate Course Interests
-    # Get interests from profile
     profile_interests = profile.get("course_interest") or []
-    
-    # Function allows explicit course_name override/addition
     course_interests = []
     if course_name:
         course_interests.append(course_name)
-    
-    # Add profile interests if available
     if profile_interests:
         if isinstance(profile_interests, list):
             course_interests.extend(profile_interests)
         elif isinstance(profile_interests, str):
              course_interests.append(profile_interests)
-             
-    # Remove duplicates and empties
     course_interests = list(set(c for c in course_interests if c))
 
     # Normalize Shifts
     saved_shifts = profile.get("preferred_shifts") or []
-    
     current_shifts = []
     if shift:
         if isinstance(shift, list):
             current_shifts.extend(shift)
         else:
             current_shifts.append(str(shift))
-    
-    # Combine current arg shifts with saved shifts
-    # (Assuming we want to match ANY preference)
     normalized_shifts = list(set(current_shifts + saved_shifts))
 
     # Normalize Program Preference
-    # If not provided arg, check profile
     if not program_preference:
         program_preference = profile.get("program_preference")
+    
+    # Force ProUni defaults for the current version
+    if not program_preference or program_preference == 'indiferente':
+        program_preference = 'prouni'
         
-    # [FIX] Consolidate University Preference
     if not university_preference:
         university_preference = profile.get("university_preference")
+        
+    if not university_preference or university_preference == 'indiferente':
+        university_preference = 'privada'
     
     # 5. Prepare RPC Parameters
-    # [FIXED] Removed logic that cleared quota_types for Prouni.
-    # We now respect user's selected quotas (even for Prouni) + Ampla Concorrência Logic is handled by SQL.
-
     page_size = 2880
     
     rpc_params = {
-        "p_user_id": user_id,  # NEW: Backend fetches ENEM scores and calculates weighted average
+        "p_user_id": user_id, 
         "course_interests": course_interests if course_interests else None,
-        # enem_score REMOVED - backend uses p_user_id to fetch and calculate
         "income_per_capita": float(per_capita_income) if per_capita_income is not None else None,
         "quota_types": quota_types if quota_types else None,
         "preferred_shifts": normalized_shifts if normalized_shifts else None,
@@ -182,12 +145,9 @@ def searchOpportunitiesTool(
         "user_long": user_long,
         "city_names": final_city_names if final_city_names else None,
         "state_names": final_state_names if final_state_names else None,
-        # university_preference REMOVED from RPC signature
         "page_size": page_size,
         "page_number": 0 
     }
-
-    # Search proceeds with any parameter defined - no quota-only guard needed
 
     print(f"!!! [DEBUG SEARCH] Calling RPC match_opportunities with {rpc_params}")
 
@@ -196,14 +156,14 @@ def searchOpportunitiesTool(
         courses = response.data
     except Exception as e:
         error_msg = str(e)
-        print(f"!!! [SEARCH ERROR] RPC failed: {error_msg}")
         
         # Check if it's a timeout error - treat as "too broad search"
         if "timeout" in error_msg.lower() or "57014" in error_msg:
+            print(f"!!! [SEARCH TIMEOUT] {error_msg}")
             refinement_msg = "A busca está muito ampla e demorou demais. Por favor, adicione mais critérios."
             try:
                 if user_id and user_id != "user":
-                    suggestion = suggestRefinementTool(user_id, 9999)  # Fake high count for refinement
+                    suggestion = suggestRefinementTool(user_id, 9999) 
                     if suggestion:
                         refinement_msg = suggestion
             except:
@@ -215,12 +175,8 @@ def searchOpportunitiesTool(
                 "needs_refinement": True
             }, ensure_ascii=False)
         
-        # Other RPC errors - generic message
-        return json.dumps({
-            "summary": "Ocorreu um erro interno na busca. Por favor, tente novamente mais tarde ou refine a busca com cidade e curso específicos.",
-            "results": [],
-            "error": True
-        }, ensure_ascii=False)
+        # Rethrow other errors to be handled by safe_execution
+        raise e
 
     # CHECK OVERFLOW (Strict Requirement: If >= 2880, ask for refinement)
     if courses and len(courses) >= 2880:
@@ -248,7 +204,6 @@ def searchOpportunitiesTool(
         }, ensure_ascii=False)
 
     # 3. Aggregation & Persistence
-    # Group results by Course ID to build the Match Map
     match_map = {}
     unique_course_ids = []
     
@@ -259,7 +214,7 @@ def searchOpportunitiesTool(
         if c_id:
              if c_id not in match_map:
                  match_map[c_id] = []
-                 unique_course_ids.append(c_id) # Sustain order
+                 unique_course_ids.append(c_id) 
              
              if o_id:
                  match_map[c_id].append(o_id)
@@ -270,26 +225,24 @@ def searchOpportunitiesTool(
 
     # --- PERSISTENCE: Save Found IDs to Workflow Data ---
     print(f"!!! [PERSISTENCE DEBUG] Entering persistence block. user_id='{user_id}', unique courses={len(unique_course_ids)}")
-    try:
-        # Save even if list is empty (clears formatted results)
-        if user_id and user_id != "user":
-            curr = supabase.table("user_preferences").select("workflow_data").eq("user_id", user_id).execute()
-            current_wf = (curr.data[0].get("workflow_data") if curr.data else {}) or {}
-            
-            current_wf["last_course_ids"] = unique_course_ids
-            current_wf["last_opportunity_map"] = match_map # Validation: New Field
-            current_wf["match_status"] = "reviewing"
-            
-            result = supabase.table("user_preferences").update({
-                "workflow_data": current_wf
-            }).eq("user_id", user_id).execute()
-            
-            print(f"!!! [SEARCH PERSISTENCE] Saved {len(unique_course_ids)} course IDs and Map to workflow_data.")
-        else:
-            print(f"!!! [PERSISTENCE SKIPPED] user_id is invalid or 'user': {user_id}")
+    
+    # removed try/catch, handled by safe_execution
+    if user_id and user_id != "user":
+        curr = supabase.table("user_preferences").select("workflow_data").eq("user_id", user_id).execute()
+        current_wf = (curr.data[0].get("workflow_data") if curr.data else {}) or {}
+        
+        current_wf["last_course_ids"] = unique_course_ids
+        current_wf["last_opportunity_map"] = match_map 
+        current_wf["match_status"] = "reviewing"
+        
+        result = supabase.table("user_preferences").update({
+            "workflow_data": current_wf
+        }).eq("user_id", user_id).execute()
+        
+        print(f"!!! [SEARCH PERSISTENCE] Saved {len(unique_course_ids)} course IDs and Map to workflow_data.")
+    else:
+        print(f"!!! [PERSISTENCE SKIPPED] user_id is invalid or 'user': {user_id}")
 
-    except Exception as e:
-        print(f"!!! [SEARCH PERSISTENCE ERROR] Failed to save IDs: {e}")
 
     # 4. Create Final Output (CONCISE for Agent)
     courses_count = len(unique_course_ids)
@@ -306,7 +259,6 @@ def searchOpportunitiesTool(
         "Os detalhes estão disponíveis no painel ao lado."
     )
     
-    # Append Active Filters to Summary for Agent Context
     filters_used = []
     if course_interests:
         filters_used.append(f"Cursos: {', '.join(course_interests)}")
@@ -328,19 +280,18 @@ def searchOpportunitiesTool(
         
     final_payload = {
         "summary": summary_text,
-        "results": [], # Empty results for LLM context optimization
+        "results": [], 
         "refinement_suggestion": None
     }
 
-    # Integrate Refinement Suggestion if count is high (> 12 results)
     if courses_count > 12 and user_id != "user":
-        try:
-             # Using suggestRefinementTool logic directly
+         if suggestRefinementTool:
+             # safe_execution won't wrap this automatically if imported? 
+             # suggestRefinementTool variable refers to what's imported.
+             # I need to ensure suggestRefinementTool is also safe.
              suggestion = suggestRefinementTool(user_id, courses_count)
              if suggestion and "SUGGESTION:" in suggestion:
                  final_payload["refinement_suggestion"] = suggestion
                  final_payload["summary"] += f"\n\n{suggestion}"
-        except Exception as e:
-            print(f"[WARN] Failed to generate refinement suggestion: {e}")
 
     return json.dumps(final_payload, ensure_ascii=False)

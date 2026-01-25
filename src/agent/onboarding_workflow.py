@@ -1,13 +1,13 @@
-from src.agent.workflow_agent import WorkflowAgent, WorkflowStep
-from google.adk.agents import LlmAgent
+from typing import Any, Dict, Optional
+from google.adk.agents import LlmAgent, Agent
+from src.agent.base_workflow import BaseWorkflow
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.logModeration import logModerationTool
 from src.agent.config import MODEL_ONBOARDING
 from src.agent.utils import load_instruction_from_file
 
-# --- Single Onboarding Agent ---
-
+# --- Single Onboarding Agent Definition ---
 onboarding_agent = LlmAgent(
     model=MODEL_ONBOARDING,
     name="onboarding_agent",
@@ -16,39 +16,41 @@ onboarding_agent = LlmAgent(
     tools=[updateStudentProfileTool, logModerationTool],
 )
 
-# --- Condition ---
-
-def check_profile_complete(state):
+def check_profile_complete(state: Dict[str, Any]) -> bool:
     """
     Retorna True apenas se TODOS os 4 campos essenciais estiverem preenchidos.
     """
-    profile = state  # Assumindo que 'state' já é o dicionário do perfil ou contém as chaves
-    
-    has_name = bool(profile.get("full_name"))
-    has_age = profile.get("age") is not None
-    has_city = bool(profile.get("city_name"))
-    has_education = bool(profile.get("education"))
+    has_name = bool(state.get("full_name"))
+    has_age = state.get("age") is not None
+    has_city = bool(state.get("city_name"))
+    has_education = bool(state.get("education"))
 
-    # Debug logs para facilitar rastreio
-    print(f"[ONBOARDING CHECK] Name={has_name}, Age={has_age}, City={has_city}, Educ={has_education}")
-
+    # Debug logs
+    if not (has_name and has_age and has_city and has_education):
+        print(f"[ONBOARDING CHECK] Incomplete: Name={has_name}, Age={has_age}, City={has_city}, Educ={has_education}")
+        
     return has_name and has_age and has_city and has_education
 
-# --- Workflow Definition ---
+class OnboardingWorkflow(BaseWorkflow):
+    @property
+    def name(self) -> str:
+        return "onboarding_workflow"
 
-onboarding_steps = [
-    WorkflowStep(
-        name="profile_collection",
-        condition=check_profile_complete,
-        agent=onboarding_agent
-    ),
-]
+    def get_agent_for_user(self, user_id: str, current_state: Dict[str, Any]) -> Optional[Agent]:
+        # If profile is NOT complete, return the agent to complete it.
+        # Note: current_state should be the profile
+        if not check_profile_complete(current_state):
+            return onboarding_agent
+        
+        # If complete, we return None, indicating this workflow is done.
+        return None
 
-def get_profile_state(user_id: str):
-    return getStudentProfileTool(user_id)
+    def handle_step_completion(self, user_id: str, current_state: Dict[str, Any], step_output: str) -> Optional[Dict[str, Any]]:
+        # Check if we just finished
+        if check_profile_complete(current_state):
+            print(f"[Workflow] Onboarding Complete. Marking flag.")
+            return {"onboarding_completed": True, "active_workflow": None}
+        return None
 
-onboarding_workflow = WorkflowAgent(
-    name="onboarding_workflow",
-    steps=onboarding_steps,
-    get_state_fn=get_profile_state
-)
+# Singleton instance
+onboarding_workflow = OnboardingWorkflow()

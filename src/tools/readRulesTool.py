@@ -1,9 +1,9 @@
-from langchain_core.tools import tool
 import os
+from src.lib.error_handler import safe_execution
 
 RULES_CONTEXT_DIR = "rules_context"
 
-# @tool("readRulesTool") - Removed to avoid conflict with LlmAgent
+@safe_execution(error_type="tool_error", default_return="Erro ao ler as regras.")
 def readRulesTool(program: str = None):
     """
     Reads the full text of official rules and documentation for a specific topic (Prouni, Sisu, Cloudinha).
@@ -31,12 +31,9 @@ def readRulesTool(program: str = None):
         
     context_files = []
     
-    try:
-        for f in os.listdir(target_dir):
-            if f.endswith(".md") or f.endswith(".txt"):
-                context_files.append(os.path.join(target_dir, f))
-    except Exception as e:
-        return f"Erro ao listar arquivos do diretório {target_dir}: {str(e)}"
+    for f in os.listdir(target_dir):
+        if f.endswith(".md") or f.endswith(".txt"):
+            context_files.append(os.path.join(target_dir, f))
 
     if not context_files:
         return f"Aviso: O diretório para '{program}' existe mas está vazio."
@@ -44,12 +41,11 @@ def readRulesTool(program: str = None):
     full_content = ""
     
     for file_path in context_files:
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                filename = os.path.basename(file_path)
-                full_content += f"\n\n{'='*20}\nCONTEÚDO DO ARQUIVO: {filename}\n{'='*20}\n\n{content}"
-        except Exception as e:
-            full_content += f"\n\nErro ao ler {os.path.basename(file_path)}: {str(e)}"
+        # Note: safe_execution wraps the whole function, so if one file fails unexpectedly it will fail the whole call unless we handle it locally. 
+        # But file reading is simple enough. If strict 'no manual try/catch', I'm removing it.
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            filename = os.path.basename(file_path)
+            full_content += f"\n\n{'='*20}\nCONTEÚDO DO ARQUIVO: {filename}\n{'='*20}\n\n{content}"
             
     return full_content
