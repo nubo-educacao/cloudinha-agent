@@ -60,32 +60,9 @@ agent = root_agent
 
 # --- Persistence & Runner Configuration ---
 # Initializing here allows both server.py and adk web (debug) to share the same persistence logic.
-from supabase import create_client
 from google.adk.runners import Runner
 from src.agent.memory.supabase_session import SupabaseSessionService
-import os
-
-# Initialize Supabase Client
-supabase_url = os.getenv("SUPABASE_URL")
-service_role_key = os.getenv("SUPABASE_SERVICE_KEY")
-anon_key = os.getenv("SUPABASE_KEY")
-
-print(f"[DEBUG KEY] Service Role Key Present: {bool(service_role_key)}")
-print(f"[DEBUG KEY] Anon Key Present: {bool(anon_key)}")
-
-if service_role_key:
-    print("[DEBUG KEY] Using SUPABASE_SERVICE_KEY")
-    supabase_key = service_role_key
-else:
-    print("[DEBUG KEY] Using SUPABASE_KEY (Anon) - WARNING: RLS may block writes")
-    supabase_key = anon_key
-
-if not supabase_url or not supabase_key:
-    print("Warning: Supabase credentials not found. Persistence might fail.")
-    # Fallback or error handling depending on strictness requirements
-    supabase_client = None 
-else:
-    supabase_client = create_client(supabase_url, supabase_key)
+from src.lib.supabase import supabase as supabase_client
 
 # Initialize Session Service
 if supabase_client:

@@ -1,7 +1,9 @@
 from src.lib.supabase import supabase
+from src.lib.error_handler import safe_execution
 from datetime import datetime
 import pytz
 
+@safe_execution(error_type="tool_error", default_return="Error logging moderation event.")
 def logModerationTool(
     message_content: str,
     agent_reasoning: str,
@@ -29,11 +31,8 @@ def logModerationTool(
         "created_at": datetime.now(pytz.utc).isoformat()
     }
 
-    try:
-        response = supabase.table("moderation_logs").insert(data).execute()
-        if response.data:
-            return f"Moderation event logged successfully. Log ID: {response.data[0]['id']}"
-        else:
-            return "Failed to log moderation event: No data returned."
-    except Exception as e:
-        return f"Error logging moderation event: {str(e)}"
+    response = supabase.table("moderation_logs").insert(data).execute()
+    if response.data:
+        return f"Moderation event logged successfully. Log ID: {response.data[0]['id']}"
+    else:
+        return "Failed to log moderation event: No data returned."
