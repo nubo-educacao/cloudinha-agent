@@ -21,6 +21,22 @@ from typing import Optional, List, Any
 # Ensure src is in path
 sys.path.append(os.path.join(os.getcwd(), 'src'))
 
+# OpenTelemetry Imports
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+# OpenTelemetry Setup (Basic Console Exporter)
+trace.set_tracer_provider(TracerProvider())
+tracer = trace.get_tracer(__name__)
+trace.get_tracer_provider().add_span_processor(
+    BatchSpanProcessor(ConsoleSpanExporter())
+)
+
+from src.agent.middleware import check_rate_limit
+
 from google.adk.runners import Runner
 from google.genai.types import Content, Part
 from src.agent.agent import agent, runner, session_service
@@ -29,6 +45,11 @@ from src.agent.workflow import run_workflow
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 
 app = FastAPI()
+
+# Instrument FastAPI
+FastAPIInstrumentor.instrument_app(app)
+# Instrument HTTPX (captures outgoing requests)
+HTTPXClientInstrumentor().instrument()
 
 # Runner and session_service are now imported from src.agent.agent
 # This ensures consistent configuration between server and agent debugging tools.
@@ -141,6 +162,15 @@ async def chat_endpoint(request: ChatRequest):
             # current_text_chunk moved inside loop
 
             has_sent_events = False
+            
+            # --- Rate Limit Check ---
+            allowed = await check_rate_limit(user_id)
+            if not allowed:
+                 error_msg = json.dumps({"type": "error", "message": "Muitas mensagens. Aguarde um pouco."})
+                 yield error_msg + "\n"
+                 return
+            # ------------------------
+
 
             try:
                 async for event in run_workflow(user_id, session_id, new_message):
@@ -157,7 +187,7 @@ async def chat_endpoint(request: ChatRequest):
 
                     # 0. Handle Custom Dict Events (Manual Tools/Logs from workflow)
                     if isinstance(event, dict):
-                        json_output = json.dumps(event)
+                        json_output = json.dumps(event, separators=(',', ':'), ensure_ascii=False)
                         print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                         yield json_output + "\n"
                         has_sent_events = True
@@ -176,7 +206,7 @@ async def chat_endpoint(request: ChatRequest):
                                          "tool": part.function_call.name,
                                          "args": part.function_call.args
                                      }
-                                     json_output = json.dumps(payload)
+                                     json_output = json.dumps(payload, separators=(',', ':'), ensure_ascii=False)
                                      print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                                      print(f"[DEBUG SERVER] Sending tool_start for {part.function_call.name}", flush=True)
                                      yield json_output + "\n"
@@ -195,7 +225,7 @@ async def chat_endpoint(request: ChatRequest):
                                           "tool": tool_name,
                                           "output": response_content
                                       }
-                                      json_output = json.dumps(payload)
+                                      json_output = json.dumps(payload, separators=(',', ':'), ensure_ascii=False)
                                       print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                                       print(f"[DEBUG SERVER] Sending tool_end for {tool_name}", flush=True)
                                       yield json_output + "\n"
@@ -216,7 +246,7 @@ async def chat_endpoint(request: ChatRequest):
                                     "tool": part.function_call.name,
                                     "args": part.function_call.args
                                 }
-                                json_output = json.dumps(payload)
+                                json_output = json.dumps(payload, separators=(',', ':'), ensure_ascii=False)
                                 print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                                 print(f"[DEBUG SERVER] Sending tool_start for {part.function_call.name} (from content)", flush=True)
                                 yield json_output + "\n"
@@ -230,7 +260,7 @@ async def chat_endpoint(request: ChatRequest):
                                     "tool": tool_name,
                                     "output": response_content
                                 }
-                                json_output = json.dumps(payload)
+                                json_output = json.dumps(payload, separators=(',', ':'), ensure_ascii=False)
                                 print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                                 print(f"[DEBUG SERVER] Sending tool_end for {tool_name} (from content)", flush=True)
                                 yield json_output + "\n"
@@ -245,7 +275,7 @@ async def chat_endpoint(request: ChatRequest):
                             "type": "text",
                             "content": current_text_chunk
                         }
-                        json_output = json.dumps(payload)
+                        json_output = json.dumps(payload, separators=(',', ':'), ensure_ascii=False)
                         print(f"[STREAM OUTPUT]: {json_output}", flush=True)
                         yield json_output + "\n"
                         has_sent_events = True

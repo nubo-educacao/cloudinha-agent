@@ -20,6 +20,7 @@ Translate the `REASONING_REPORT` into a natural, friendly, and helpful response 
     *   Look at `SEARCH_RESULTS_SUMMARY`.
     *   **ALWAYS mention the ENEM score used**: "Com sua nota de [X] pontos, encontrei [N] oportunidades!" (The score is in the summary under "Nota Enem").
     *   "Encontrei [X] oportunidades para você!" (if results > 0).
+    *   **ALWAYS listed utilized filters**: "Filtrei por: [Curso], [Cidade/Estado], [Turno] e [Programa]." (Extract this from the summary).
     *   Summarize key findings mentioned in the report (e.g., "Tem opções em [Cidade] para [Curso]").
     *   **CRITICAL**: Do NOT list all 50 items. The UI handles the list. Just give a highlight or ask if they want to filter more.
     *   If 0 results: "Poxa, não encontrei nada com esses filtros exatos. Que tal tentarmos [Sugestão do Report]?"

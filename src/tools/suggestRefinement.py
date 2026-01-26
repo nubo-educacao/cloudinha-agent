@@ -1,6 +1,8 @@
 from typing import Dict, Any
 from src.tools.getStudentProfile import getStudentProfileTool
+from src.lib.error_handler import safe_execution
 
+@safe_execution(error_type="tool_error", default_return="Erro ao sugerir refinamento.")
 def suggestRefinementTool(user_id: str, result_count: int) -> str:
     """
     Analyzes the user's profile and the search result count to suggest the most useful refinement question.
@@ -15,10 +17,8 @@ def suggestRefinementTool(user_id: str, result_count: int) -> str:
     """
     
     # Fetch current search state from profile
-    try:
-        state = getStudentProfileTool(user_id)
-    except Exception as e:
-        return f"Error fetching profile: {e}. Cannot suggest refinement."
+    # getStudentProfileTool is safe, returns {} on error
+    state = getStudentProfileTool(user_id)
 
     if not state:
         return "Profile not found."

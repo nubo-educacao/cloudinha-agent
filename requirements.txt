@@ -15,3 +15,8 @@ uvicorn
 google-genai
 tenacity
 ddgs
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx
+httpx

@@ -3,7 +3,9 @@ import json
 from src.lib.supabase import supabase
 from src.tools.searchOpportunities import searchOpportunitiesTool
 from src.tools.updateStudentProfile import standardize_city, standardize_state
+from src.lib.error_handler import safe_execution
 
+@safe_execution(error_type="tool_error", default_return=None)
 def get_city_coordinates_from_db(city_name: str, state_code: Optional[str] = None):
     """
     Get latitude and longitude for a city name using the Supabase 'cities' table.
@@ -11,24 +13,21 @@ def get_city_coordinates_from_db(city_name: str, state_code: Optional[str] = Non
     if not city_name:
         return None
 
-    try:
-        query = supabase.table("cities").select("latitude, longitude").ilike("name", city_name)
-        
-        if state_code:
-            query = query.eq("state", state_code)
-            
-        result = query.execute()
-        
-        if result.data and len(result.data) > 0:
-            # Return the first match
-            record = result.data[0]
-            return float(record['latitude']), float(record['longitude'])
-            
-    except Exception as e:
-        print(f"Error fetching coordinates for {city_name} from DB: {e}")
+    query = supabase.table("cities").select("latitude, longitude").ilike("name", city_name)
     
+    if state_code:
+        query = query.eq("state", state_code)
+        
+    result = query.execute()
+    
+    if result.data and len(result.data) > 0:
+        # Return the first match
+        record = result.data[0]
+        return float(record['latitude']), float(record['longitude'])
+            
     return None
 
+@safe_execution(error_type="tool_error", default_return='{"success": false, "error": "Erro ao atualizar preferências."}')
 def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     """
     Atualiza as preferências de busca do aluno (curso, nota, turno, etc.) e dispara a busca de oportunidades.
@@ -36,13 +35,11 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     Args:
         user_id: ID do usuário (pode ser "user" para debug locais).
         updates: Dicionário contendo os campos a atualizar. 
-                 Chaves comuns: 'course_interest', 'enem_score', 'preferred_shifts', 'city_name', 
-                 'university_preference', 'program_preference', 'quota_types', 'per_capita_income',
+                 Chaves comuns: 'course_interest', 'enem_score', 'preferred_shifts' (use ['EAD'] se o usuário pedir EAD), 
+                 'city_name', 'university_preference', 'program_preference', 'quota_types', 'per_capita_income',
                  'state_preference'.
     """
     
-
-
     print(f"!!! [DEBUG TOOL] updateStudentPreferencesTool CALLED with user_id={user_id}, updates={updates}")
     
     results = {
@@ -55,29 +52,33 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     preferences_updates = {}
     
     # --- 1. Score Normalization ---
-    # --- 1. Score & Income (Ignored - Managed by MatchWizard) ---
-    # We intentionally SKIP updating enem_score and family_income_per_capita here
-    # as they are now managed exclusively by the MatchWizard frontend component.
     if "enem_score" in updates:
-        print(f"!!! [SKIP UPDATE] enem_score update ignored (managed by Wizard): {updates['enem_score']}")
+        preferences_updates["enem_score"] = float(updates["enem_score"])
+        print(f"!!! [SCORE UPDATE] enem_score set to: {preferences_updates['enem_score']}")
     
     if "per_capita_income" in updates:
-        print(f"!!! [SKIP UPDATE] per_capita_income update ignored (managed by Wizard): {updates['per_capita_income']}")
+        preferences_updates["family_income_per_capita"] = float(updates["per_capita_income"])
+        print(f"!!! [INCOME UPDATE] family_income_per_capita set to: {preferences_updates['family_income_per_capita']}")
 
     # Registration Step (Wizard Progress)
     if "registration_step" in updates:
         preferences_updates["registration_step"] = str(updates["registration_step"])
 
     # Program Preference (sisu/prouni/indiferente)
-    # Program Preference (FORCED TO SISU/PUBLICA FOR NOW)
-    # User request: "padronizar sisu como program_preference e publica como university_preference"
-    preferences_updates["program_preference"] = "sisu"
-    preferences_updates["university_preference"] = "publica"
+    prog_pref = updates.get("program_preference")
+    if not prog_pref or prog_pref == 'indiferente':
+        prog_pref = "prouni"
+    preferences_updates["program_preference"] = prog_pref
+
+    univ_pref = updates.get("university_preference")
+    if not univ_pref or univ_pref == 'indiferente':
+        univ_pref = "privada"
+    preferences_updates["university_preference"] = univ_pref
 
     # Quota Types
-    # Quota Types (Ignored - Managed by MatchWizard)
     if "quota_types" in updates:
-        print(f"!!! [SKIP UPDATE] quota_types update ignored (managed by Wizard): {updates['quota_types']}")
+        preferences_updates["quota_types"] = updates["quota_types"]
+        print(f"!!! [QUOTA UPDATE] quota_types set to: {updates['quota_types']}")
     
     # --- 2. Course Normalization (Parse multiple courses from string) ---
     
@@ -100,72 +101,55 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         return []
     
     def match_course_to_database(user_input: str, course_list: List[str]) -> Optional[str]:
-        """
-        Find the best matching course name from the database.
-        Uses case-insensitive prefix/substring matching.
-        """
+        """Find the best matching course name."""
         if not user_input or not course_list:
             return None
         
         user_lower = user_input.lower().strip()
-        
-        # 1. Exact match (case-insensitive)
         for course in course_list:
             if course.lower() == user_lower:
                 return course
-        
-        # 2. Starts with match
         for course in course_list:
             if course.lower().startswith(user_lower):
                 return course
-        
-        # 3. Contains match (for partial names like "engenharia" -> "Engenharia Civil")
-        # Only if user input is at least 4 chars (avoid false positives)
         if len(user_lower) >= 4:
             for course in course_list:
                 if user_lower in course.lower():
                     return course
-        
         return None
     
     def parse_course_list(raw_value: str) -> List[str]:
-        """
-        Parse a string like "direito e filosofia" or "medicina, engenharia ou direito"
-        into a list like ["Direito", "Filosofia"] or ["Medicina", "Engenharia", "Direito"].
-        Also validates against the database course names.
-        """
+        """Parse a string into a list of courses."""
         import re
-        
-        # Normalize the input
         clean = raw_value.strip()
-        
-        # Check for "don't know" patterns
         lower = clean.lower()
         if "não sei" in lower or "indeciso" in lower or "ainda não" in lower:
             return []
-        
-        # Split by common separators: ", ", " e ", " ou ", " / ", "; "
-        # Use regex to handle variations
+            
+        # [NEW] Detect EAD in course string and mark for shift update
+        nonlocal preferences_updates
+        if "ead" in lower:
+            existing_shifts = preferences_updates.get("preferred_shifts", [])
+            # Map EAD to the correct Database Value
+            db_ead_value = "Curso a distância"
+            if db_ead_value not in existing_shifts:
+                existing_shifts.append(db_ead_value)
+                preferences_updates["preferred_shifts"] = existing_shifts
+                print(f"!!! [EAD DETECTED] Adding '{db_ead_value}' to shifts and cleaning course name")
+            # Remove 'ead' from the string to avoid saving it as a course
+            clean = re.sub(r'\bead\b', '', clean, flags=re.IGNORECASE).strip()
+
         parts = re.split(r'\s*[,;/]\s*|\s+e\s+|\s+ou\s+', clean, flags=re.IGNORECASE)
-        
-        # Get course names from DB for validation
         db_courses = get_course_names_from_db()
-        
-        # Clean up each part and validate against DB
         courses = []
         for part in parts:
             stripped = part.strip()
-            if stripped and len(stripped) > 1:  # Avoid single letters
-                # Try to match with database course names
+            if stripped and len(stripped) > 1:
                 matched = match_course_to_database(stripped, db_courses)
                 if matched:
                     courses.append(matched)
-                    print(f"!!! [COURSE MATCHED] '{stripped}' -> '{matched}'")
                 else:
-                    # Fallback: use Title Case if no DB match
                     courses.append(stripped.title())
-                    print(f"!!! [COURSE FALLBACK] '{stripped}' -> '{stripped.title()}' (no DB match)")
-        
         return courses
 
     if "course_interest" in updates:
@@ -175,7 +159,6 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
             preferences_updates["course_interest"] = courses
             print(f"!!! [COURSE PARSED] '{val}' -> {courses}")
         elif isinstance(val, list):
-            # Also normalize list items
             normalized = []
             for item in val:
                 if isinstance(item, str):
@@ -215,11 +198,18 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     if "state_preference" in updates:
         raw_state = updates["state_preference"]
         normalized_state = standardize_state(raw_state)
+        
+        # [NEW] If state is specified but NOT city, clear city and coordinates
+        if "city_name" not in updates and "location_preference" not in updates:
+            print(f"!!! [STATE UPDATE] Clearing previous city/coords to search in {normalized_state or raw_state}")
+            preferences_updates["location_preference"] = None
+            preferences_updates["device_latitude"] = None
+            preferences_updates["device_longitude"] = None
+
         if normalized_state:
             preferences_updates["state_preference"] = normalized_state
             print(f"!!! [STATE STANDARDIZED] '{raw_state}' -> '{normalized_state}'")
         else:
-            # Keep original but log warning
             preferences_updates["state_preference"] = raw_state
             print(f"!!! [STATE NOT FOUND] Keeping original: '{raw_state}'")
     
@@ -262,14 +252,27 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     # --- 4. Shift Normalization ---
     def normalize_shift_value(val: str) -> str:
         lower = val.lower().strip()
-        if 'EAD' in lower or 'Curso a distância' in lower:
-            return 'EAD'
+        if 'ead' in lower or 'curso a distância' in lower or 'distância' in lower or 'distancia' in lower:
+            return 'Curso a distância'
         shift_map = {
             'matutino': 'Matutino',
+            'manhã': 'Matutino',
+            'manha': 'Matutino',
             'vespertino': 'Vespertino',
+            'tarde': 'Vespertino',
             'noturno': 'Noturno',
-            'integral': 'Integral'
+            'noite': 'Noturno',
+            'integral': 'Integral',
+            'dia todo': 'Integral',
+            'diurno': 'Integral' # Often confused, but usually means full day or matutino/vespertino. Defaulting to Integral or maybe we should map to Matutino? 
+                                 # Checking DB, usually Integral is specific. Let's map 'dia todo' to Integral.
         }
+        # Fuzzy check for partial matches if direct lookup fails
+        if 'manh' in lower: return 'Matutino'
+        if 'tarde' in lower: return 'Vespertino'
+        if 'noite' in lower or 'notur' in lower: return 'Noturno'
+        if 'integral' in lower: return 'Integral'
+        
         return shift_map.get(lower, val)
 
     if "shift" in updates or "preferred_shifts" in updates:
@@ -292,103 +295,106 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
             else:
                 preferences_updates["preferred_shifts"] = [normalize_shift_value(str(val))]
 
-    # --- 5. Institution Type Normalization (Ignored/Forced) ---
-    # We already forced 'publica' above, so we ignore other inputs here to be consistent.
-    if "institution_type" in updates or "university_preference" in updates:
-         print("!!! [SKIP UPDATE] university/institution preference forced to 'publica'.")
+    # --- 5. Institution Type Normalization ---
+    # Forced to ProUni/Private defaults for the current season
+    prog_pref = preferences_updates.get("program_preference") or pf.get("program_preference")
+    if not prog_pref or prog_pref == 'indiferente':
+        preferences_updates["program_preference"] = "prouni"
+        
+    univ_pref = preferences_updates.get("university_preference") or pf.get("university_preference")
+    if not univ_pref or univ_pref == 'indiferente':
+        preferences_updates["university_preference"] = "privada"
+
+    print(f"!!! [PROUNI ENFORCED] Program: {preferences_updates.get('program_preference')}, Univ: {preferences_updates.get('university_preference')}")
     
     # --- EXECUTE DB UPDATE ---
     if preferences_updates:
-        try:
-            existing_prefs_response = supabase.table("user_preferences").select("id").eq("user_id", user_id).maybe_single().execute()
-            existing_prefs = existing_prefs_response.data if existing_prefs_response else None
+        # DB Updates handled by safe_execution
+        existing_prefs_response = supabase.table("user_preferences").select("id").eq("user_id", user_id).maybe_single().execute()
+        existing_prefs = existing_prefs_response.data if existing_prefs_response else None
 
-            if existing_prefs:
-                supabase.table("user_preferences").update(preferences_updates).eq("id", existing_prefs["id"]).execute()
-            else:
-                data = preferences_updates.copy()
-                data["user_id"] = user_id
-                supabase.table("user_preferences").insert(data).execute()
-            
-            results["preferences_updated"] = True
-        except Exception as e:
-             print(f"!!! [ERROR PREFS] Update FAILED: {e}")
-             results["errors"].append(str(e))
+        if existing_prefs:
+            supabase.table("user_preferences").update(preferences_updates).eq("id", existing_prefs["id"]).execute()
+        else:
+            data = preferences_updates.copy()
+            data["user_id"] = user_id
+            supabase.table("user_preferences").insert(data).execute()
+        
+        results["preferences_updated"] = True
+        
+        # Invalidate cache (since getStudentProfile also returns preferences)
+        try:
+            from src.tools.getStudentProfile import invalidate_profile_cache
+            invalidate_profile_cache(user_id)
+        except ImportError:
+            pass
 
     # --- AUTO-TRIGGER SEARCH & WORKFLOW SWITCH LOGIC ---
+    # Safe execution covers this block
+    # Fetch fresh complete state to decide on search
+    final_prefs = supabase.table("user_preferences").select("*").eq("user_id", user_id).maybe_single().execute()
+    pf = final_prefs.data if final_prefs else {}
     
-    try:
-        # Fetch fresh complete state to decide on search
-        final_prefs = supabase.table("user_preferences").select("*").eq("user_id", user_id).maybe_single().execute()
-        pf = final_prefs.data if final_prefs else {}
-        
-        c_interest = pf.get("course_interest")
-        score = pf.get("enem_score")
-        shifts = pf.get("preferred_shifts")
-        uni_type = pf.get("university_preference")
-        state_pref = pf.get("state_preference")
+    c_interest = pf.get("course_interest")
+    score = pf.get("enem_score")
+    shifts = pf.get("preferred_shifts")
+    uni_type = pf.get("university_preference")
+    state_pref = pf.get("state_preference")
 
-        # Check for ANY preference that could filter search results
-        has_any_filter = (
-            bool(c_interest) or 
-            (score is not None) or 
-            bool(shifts) or 
-            bool(uni_type) or 
-            bool(state_pref) or 
-            bool(pf.get("location_preference")) or
-            bool(pf.get("program_preference")) or
-            bool(pf.get("quota_types")) or
-            (pf.get("family_income_per_capita") is not None)
+    # Check for ANY preference that could filter search results
+    has_any_filter = (
+        bool(c_interest) or 
+        (score is not None) or 
+        bool(shifts) or 
+        bool(uni_type) or 
+        bool(state_pref) or 
+        bool(pf.get("location_preference")) or
+        bool(pf.get("program_preference")) or
+        bool(pf.get("quota_types")) or
+        (pf.get("family_income_per_capita") is not None)
+    )
+    
+    should_search = has_any_filter
+    
+    if should_search:
+        # Check Workflow State
+        try:
+            profile_ctx = supabase.table("user_profiles").select("active_workflow").eq("id", user_id).maybe_single().execute()
+            active_wf = profile_ctx.data.get("active_workflow") if (profile_ctx and profile_ctx.data) else None
+        except:
+            active_wf = None
+        
+        # WORKFLOW SWITCH: If not in match_workflow, force switch
+        if active_wf != "match_workflow":
+            print(f"!!! [AUTO SWITCH] Switching from {active_wf} to match_workflow to display results.")
+            supabase.table("user_profiles").update({"active_workflow": "match_workflow"}).eq("id", user_id).execute()
+            results["workflow_switched"] = True
+
+        # EXECUTE SEARCH
+        # Note: searchOpportunitiesTool will load course_interest from profile
+        print(f"!!! [AUTO SEARCH] Triggering search with: course={c_interest}, score={score}, shifts={shifts}, uni={uni_type}, state={state_pref}")
+            
+        opportunities_json = searchOpportunitiesTool(
+            user_id=user_id,
+            course_name=None, 
+            enem_score=float(score) if score is not None else 0.0,
+            shift=shifts,
+            institution_type=uni_type,
+            university_preference=uni_type, 
+            program_preference=pf.get("program_preference"),
+            per_capita_income=pf.get("family_income_per_capita"),
+            quota_types=pf.get("quota_types"),
+            user_lat=pf.get("device_latitude"),
+            user_long=pf.get("device_longitude"),
+            city_name=pf.get("location_preference"),
+            state_name=pf.get("state_preference")
         )
         
-        # Determine if we should search (Basic logic: if we have any filter, try searching)
-        should_search = has_any_filter
-        
-        if should_search:
-            # Check Workflow State
-            try:
-                profile_ctx = supabase.table("user_profiles").select("active_workflow").eq("id", user_id).maybe_single().execute()
-                active_wf = profile_ctx.data.get("active_workflow") if (profile_ctx and profile_ctx.data) else None
-            except:
-                active_wf = None
+        try:
+            results["auto_search_results"] = json.loads(opportunities_json)
+        except:
+            results["auto_search_results"] = opportunities_json
             
-            # WORKFLOW SWITCH: If not in match_workflow, force switch
-            if active_wf != "match_workflow":
-                print(f"!!! [AUTO SWITCH] Switching from {active_wf} to match_workflow to display results.")
-                supabase.table("user_profiles").update({"active_workflow": "match_workflow"}).eq("id", user_id).execute()
-                results["workflow_switched"] = True
-
-            # EXECUTE SEARCH
-            # Note: searchOpportunitiesTool will load course_interest from profile
-            # We pass None for course_name since the profile is already updated
-            print(f"!!! [AUTO SEARCH] Triggering search with: course={c_interest}, score={score}, shifts={shifts}, uni={uni_type}, state={state_pref}")
-                
-            opportunities_json = searchOpportunitiesTool(
-                user_id=user_id,
-                course_name=None,  # Let the tool load from profile to get ALL courses
-                enem_score=float(score) if score is not None else 0.0,
-                shift=shifts,
-                institution_type=uni_type,
-                university_preference=uni_type, # Explicit: pass uni_type also as university_preference
-                program_preference=pf.get("program_preference"),
-                per_capita_income=pf.get("family_income_per_capita"),
-                quota_types=pf.get("quota_types"),
-                user_lat=pf.get("device_latitude"),
-                user_long=pf.get("device_longitude"),
-                city_name=pf.get("location_preference"),
-                state_name=pf.get("state_preference")
-            )
-            
-            try:
-                results["auto_search_results"] = json.loads(opportunities_json)
-            except:
-                results["auto_search_results"] = opportunities_json
-                
-            results["search_performed"] = True
-            
-    except Exception as e:
-        print(f"!!! [AUTO SEARCH ERROR] {e}")
-        results["errors"].append(f"Search Error: {str(e)}")
-
+        results["search_performed"] = True
 
     return json.dumps({"success": True, **results}, ensure_ascii=False)

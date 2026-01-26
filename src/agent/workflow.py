@@ -1,35 +1,41 @@
-from typing import AsyncGenerator, Any
+from typing import AsyncGenerator, Any, Dict, Optional
+import asyncio
+import httpx
 from google.adk.runners import Runner
-from google.adk.agents import LlmAgent
-from google.genai.types import Content, Part, GenerateContentConfig, ToolConfig
-from src.agent.agent import root_agent, session_service, sisu_agent, prouni_agent
-# from src.agent.guardrails import guardrails_agent # Removed
+from google.adk.agents import LlmAgent, Agent
+from google.genai.types import Content, Part
 from google.adk.sessions import InMemorySessionService
-from src.agent.onboarding_workflow import onboarding_workflow
-from src.agent.match_agent import match_agent
-
-from src.agent.router_agent import router_agent
-import re
-import json
-import functools
-from src.tools.updateStudentProfile import updateStudentProfileTool
+from src.lib.resilience import retry_with_backoff
+from tenacity import RetryError
+from src.agent.agent import session_service, root_agent, sisu_agent, prouni_agent
+from src.agent.router_agent import execute_router_agent
+from src.agent.retrieval import retrieve_similar_examples
 from src.tools.getStudentProfile import getStudentProfileTool
+from src.tools.updateStudentProfile import updateStudentProfileTool
+import logging
 
-# Simple mock event for text responses (like Auth block)
+# Workflows
+from src.agent.base_workflow import SingleAgentWorkflow
+from src.agent.onboarding_workflow import onboarding_workflow
+from src.agent.match_workflow import MatchWorkflow
+
+# Initialize Registry
+workflow_registry = {
+    "match_workflow": MatchWorkflow(),
+    "sisu_workflow": SingleAgentWorkflow(sisu_agent, "sisu_workflow"),
+    "prouni_workflow": SingleAgentWorkflow(prouni_agent, "prouni_workflow"),
+    "onboarding_workflow": onboarding_workflow
+}
+
+# Wrapper for Root (Default)
+root_workflow = SingleAgentWorkflow(root_agent, "root_workflow")
+
 class SimpleTextEvent:
     def __init__(self, text: str):
         self.text = text
 
 def check_authentication(user_id: str) -> bool:
-    """
-    Verifies if the user is authenticated.
-    Returns True if valid, False if anonymous or missing.
-    """
-    if not user_id or user_id.strip() == "" or user_id == "anon-user":
-        return False
-    return True
-
-from src.agent.retrieval import retrieve_similar_examples
+    return bool(user_id and user_id.strip() != "" and user_id != "anon-user")
 
 async def run_workflow(
     user_id: str,
@@ -37,517 +43,195 @@ async def run_workflow(
     new_message: Content
 ) -> AsyncGenerator[Any, None]:
     """
-    Orchestrates the agent workflow:
-    1. Auth Check
-    2. Workflow Routing (Onboarding -> Match -> Root)
+    Orchestrates the generic agent workflow.
     """
-
-    # 1. Auth Check
     if not check_authentication(user_id):
         yield SimpleTextEvent("Desculpe, não posso falar com você se não estiver logado.")
         return
 
-    # 2. Router Loop (Guardrails removed - Agents handle moderation via tools)
-    transient_session_service = InMemorySessionService()
-    
-    # 3. Safe -> Router Loop
-    
-    MAX_STEPS = 10 
-    steps_run = 0
-    current_message = new_message
-    
-    # 0. Fetch state ONCE before loop
-    yield {
-            # "type": "tool_start", # Removed to be silent
-            # "tool": "preload_student_profile" 
-            # ...
-    }
-    # Silent fetch
+    # 0. Fetch Initial State
     profile_state = getStudentProfileTool(user_id)
     
+    # Pre-loop Router check (Steps == 0 logic)
+    # Only run Router if onboarding is complete
+    if profile_state.get("onboarding_completed"):
+        msg_text = new_message.parts[0].text if new_message.parts else ""
+        decision = await execute_router_agent(user_id, session_id, msg_text, profile_state)
+        
+        if decision:
+             intent = decision.get("intent")
+             target = decision.get("target_workflow")
+             
+             if intent == "CHANGE_WORKFLOW" and target:
+                 yield {"type": "tool_start", "tool": "RouterAgent", "args": {"action": "switch", "target": target}}
+                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": target})
+                 profile_state = getStudentProfileTool(user_id) # Refresh
+                 yield {"type": "tool_end", "tool": "RouterAgent", "output": f"Sent to {target}"}
+                 
+             elif intent == "EXIT_WORKFLOW":
+                 yield {"type": "tool_start", "tool": "RouterAgent", "args": {"action": "exit"}}
+                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
+                 profile_state = getStudentProfileTool(user_id) # Refresh
+                 yield {"type": "tool_end", "tool": "RouterAgent", "output": "Exited workflow"}
+
+    # Main Loop
+    MAX_STEPS = 10
+    steps_run = 0
+    current_message = new_message
+
     while steps_run < MAX_STEPS:
-        # --- ROUTER AGENT (CONTEXT SWITCHING) ---
-        # Profile already loaded
-
-
-        # --- ROUTER AGENT (CONTEXT SWITCHING) ---
-        if steps_run == 0:
-                if profile_state.get("onboarding_completed"):
-                    try:
-                        # Prepare Context for Router
-                        router_input_text = f"MENSAGEM: {new_message.parts[0].text if new_message.parts else ''}\n\nESTADO ATUAL:\nactive_workflow: {profile_state.get('active_workflow')}\nonboarding_completed: {profile_state.get('onboarding_completed')}"
-                        
-                        router_msg = Content(role="user", parts=[Part(text=router_input_text)])
-                        
-                        # Run Router (Transient)
-                        await transient_session_service.create_session(
-                            app_name="router_check",
-                            session_id=session_id,
-                            user_id=user_id
-                        )
-                        router_runner = Runner(agent=router_agent, app_name="router_check", session_service=transient_session_service)
-                        router_response = ""
-                        
-                        async for r_event in router_runner.run_async(user_id=user_id, session_id=session_id, new_message=router_msg):
-                            if hasattr(r_event, 'text') and r_event.text:
-                                router_response += r_event.text
-                            elif hasattr(r_event, 'content') and r_event.content.parts:
-                                for p in r_event.content.parts:
-                                    if p.text: router_response += p.text
-                        
-                        # Parse JSON
-                        json_match = re.search(r"\{.*\}", router_response, re.DOTALL)
-                        if json_match:
-                            decision = json.loads(json_match.group(0))
-                            print(f"[Router decision]: {decision}")
-                            
-                            if decision.get("intent") == "CHANGE_WORKFLOW":
-                                target = decision.get("target_workflow")
-                                print(f"[Router Action] Switching to {target}")
-                                
-                                # Yield Manual Tool Event for UI Feedback
-                                yield {
-                                    "type": "tool_start",
-                                    "tool": "RouterAgent",
-                                    "args": {"action": "switch_context", "target": target}
-                                }
-                                
-                                updateStudentProfileTool(user_id=user_id, updates={"active_workflow": target})
-                                profile_state["active_workflow"] = target # Update in-memory
-                                
-                                yield {
-                                    "type": "tool_end",
-                                    "tool": "RouterAgent",
-                                    "output": f"Contexto alterado para {target}"
-                                }
-                                
-                            elif decision.get("intent") == "EXIT_WORKFLOW":
-                                print(f"[Router Action] Exiting workflow")
-                                
-                                yield {
-                                    "type": "tool_start", 
-                                    "tool": "RouterAgent",
-                                    "args": {"action": "exit_workflow"}
-                                }
-                                
-                                updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
-                                profile_state["active_workflow"] = None # Update in-memory
-                                
-                                yield {
-                                    "type": "tool_end",
-                                    "tool": "RouterAgent",
-                                    "output": "Workflow encerrado"
-                                }
-                                
-                    except Exception as e:
-                        print(f"[Router Error]: {e}")
-                        import traceback
-                        tb = traceback.format_exc()
-                        try:
-                            from src.agent.agent import supabase_client
-                            supabase_client.table('agent_errors').insert({
-                                'user_id': user_id,
-                                'session_id': None,  # Use None - session_id may have prefix
-                                'error_type': 'router_error',
-                                'error_message': str(e),
-                                'stack_trace': tb,
-                                'metadata': {'router_input': router_input_text}
-                            }).execute()
-                        except Exception as log_err:
-                            print(f"Failed to log router error: {log_err}")
-        active_workflow_obj = None
-        active_step_agent = None
         
-        # Logic:
-        # 1. Onboarding not completed -> Onboarding Workflow
-        # 2. Onboarding completed AND active_workflow == "match" -> Match Workflow
-        # 3. active_workflow == "sisu" -> Sisu Agent (direct)
-        # 4. active_workflow == "prouni" -> Prouni Agent (direct)
-        # 5. Else -> Root Agent (break loop)
-        
+        # 1. Determine Active Workflow
+        active_workflow_name = profile_state.get("active_workflow")
+        workflow_obj = None
+
         if not profile_state.get("onboarding_completed"):
-                active_workflow_obj = onboarding_workflow
-                # [FIX] Explicitly set active_workflow for consistency
-                if profile_state.get("active_workflow") != "onboarding_workflow":
-                    print(f"[Workflow] Explicitly setting active_workflow to 'onboarding_workflow'")
-                    updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "onboarding_workflow"})
-                    # Update local state so we don't loop/re-trigger unnecessarily
-                    profile_state["active_workflow"] = "onboarding_workflow"
-
-        elif profile_state.get("active_workflow") == "match_workflow":
-                # --- MATCH AGENT SPLIT (Reasoning -> Response) ---
-                from src.agent.match_reasoning import match_reasoning_agent
-                from src.agent.match_response import match_response_agent
-                
-                # [WIZARD CHECK] Verification of Hard Data
-                # We check the explicit 'registration_step' flag (scores -> quotas -> income -> completed)
-                # This ensures we don't start the agent until the wizard is FULLY done.
-                
-                # Fetch fresh registration_step if missing from profile_state
-                # (getStudentProfileTool merges preferences, so it might be there)
-                # But to be safe let's rely on what we have or re-fetch preferences if needed.
-                # Actually getStudentProfileTool includes 'user_preferences' fields if configured...
-                # Let's assume profile_state has it (we need to verify getStudentProfileTool adds it).
-                # If not, let's treat as incomplete.
-                
-                registration_step = profile_state.get("registration_step")
-                
-                # Backwards compatibility / Fallback: If null, check for data existence?
-                # No, we want to enforce the migration. If null, strictly block.
-                
-                is_wizard_complete = (registration_step == 'completed')
-
-                if not is_wizard_complete:
-                    # BLOCKING SIGNAL
-                    yield {
-                        "type": "control",
-                        "action": "block_input",
-                        "reason": "wizard_incomplete"
-                    }
-                    
-                    yield {
-                        "type": "text",
-                        "content": "Para começar, preciso que você me dê algumas informações. Você não precisa responder se não quiser, mas quanto mais informações tivemos, melhor será seu match!"
-                    }
-                    # Stop workflow here (Frontend should show the Wizard)
-                    break
-
-                print("[Match] Running Reasoning Agent...")
-                reasoning_output = ""
-                
-                # 1. Run Reasoning Agent (Tool Execution & Logic)
-                # We do NOT let it stream text to the user to avoid breaking character.
-                # We DO stream tool events so the user sees "Searching...".
-                
-                # [FIX] Dynamically instantiate to inject USER_ID_CONTEXT
-                reasoning_instance = LlmAgent(
-                    model=match_reasoning_agent.model,
-                    name=match_reasoning_agent.name,
-                    description=match_reasoning_agent.description,
-                    instruction=f"USER_ID_CONTEXT: {user_id}\n" + match_reasoning_agent.instruction,
-                    tools=match_reasoning_agent.tools
-                )
-
-                r_runner = Runner(agent=reasoning_instance, app_name="cloudinha-agent", session_service=session_service)
-                
-                # Yield "Thinking" event? 
-                yield {
-                    "type": "tool_start",
-                    "tool": "ReasoningEngine",
-                    "args": {"action": "analyzing_request"}
-                }
-
-                actual_tool_calls = 0  # Track if any real tools were called
-                
-                try:
-                    async for r_event in r_runner.run_async(user_id=user_id, session_id=session_id, new_message=current_message):
-                        # DEBUG: Log ALL events from reasoning runner
-                        print(f"!!! [REASONING EVENT] Type: {type(r_event).__name__}, Event: {r_event if isinstance(r_event, dict) else 'Object'}")
-                        
-                        # Detect actual function calls from ADK events
-                        if hasattr(r_event, 'content') and r_event.content and hasattr(r_event.content, 'parts'):
-                            for part in r_event.content.parts:
-                                if hasattr(part, 'function_call') and part.function_call:
-                                    actual_tool_calls += 1
-                                    tool_name = part.function_call.name
-                                    print(f"!!! [DETECTED TOOL CALL] {tool_name}")
-                                    
-                                    # Emit tool_start for the frontend to see
-                                    yield {
-                                        "type": "tool_start",
-                                        "tool": tool_name,
-                                        "args": {}
-                                    }
-                                
-                                # Detect function response (tool finished)
-                                if hasattr(part, 'function_response') and part.function_response:
-                                    tool_name = part.function_response.name
-                                    tool_output = str(part.function_response.response) if part.function_response.response else ""
-                                    print(f"!!! [TOOL RESPONSE] {tool_name}: {tool_output[:200]}...")
-                                    
-                                    # Emit tool_end with output for the frontend
-                                    yield {
-                                        "type": "tool_end",
-                                        "tool": tool_name,
-                                        "output": tool_output
-                                    }
-                        
-                        # Pass through tool events (if ADK sends them as dicts)
-                        if isinstance(r_event, dict) and r_event.get('type') in ['tool_start', 'tool_end']:
-                            if r_event.get('type') == 'tool_end' and r_event.get('output'):
-                                print(f"!!! [TOOL OUTPUT] {r_event.get('tool')}: {r_event.get('output')}")
-                                actual_tool_calls += 1  # Also count dict-based tool events
-                            yield r_event
-                        # Capture text
-                        elif hasattr(r_event, 'text') and r_event.text:
-                            reasoning_output += r_event.text
-                        elif hasattr(r_event, 'content') and r_event.content and hasattr(r_event.content, 'parts') and r_event.content.parts:
-                            for p in r_event.content.parts:
-                                if hasattr(p, 'text') and p.text: reasoning_output += p.text
-                except Exception as reasoning_err:
-                    error_msg = str(reasoning_err)
-                    print(f"!!! [REASONING ERROR] {error_msg}")
-                    import traceback
-                    tb = traceback.format_exc()
-                    
-                    # Log to agent_errors
-                    try:
-                        from src.agent.agent import supabase_client
-                        supabase_client.table('agent_errors').insert({
-                            'user_id': user_id,
-                            'session_id': None,  # Use None instead of potentially malformed session_id
-                            'error_type': 'reasoning_agent_error',
-                            'error_message': error_msg,
-                            'stack_trace': tb,
-                            'metadata': {'model': 'gemini-2.0-flash'}
-                        }).execute()
-                        print(f"!!! [ERROR LOGGED] Saved reasoning error to agent_errors")
-                    except Exception as log_err:
-                        print(f"!!! [ERROR LOG FAILED] {log_err}")
-                    
-                    # Yield error to frontend
-                    yield {
-                        "type": "error",
-                        "message": f"Erro interno: {error_msg}"
-                    }
-                    return  # Stop processing
-                
-                print(f"!!! [REASONING COMPLETE] Tool calls detected: {actual_tool_calls}")
-                
-                yield {
-                    "type": "tool_end",
-                    "tool": "ReasoningEngine",
-                    "output": "Análise concluída"
-                }
-                
-                print(f"[Match] Reasoning Output: {reasoning_output}")
-                
-                # 2. Setup Response Agent (Persona)
-                # We inject the reasoning output into the message context for the Response Agent.
-                
-                user_original_text = current_message.parts[0].text if current_message.parts else ""
-                context_msg_text = f"REASONING_REPORT:\n{reasoning_output}\n\nUSER_MESSAGE:\n{user_original_text}"
-                
-                # Update 'current_message' and 'active_step_agent' for the downstream loop to execute Response Agent
-                current_message = Content(role="user", parts=[Part(text=context_msg_text)])
-                active_step_agent = match_response_agent
-
-        elif profile_state.get("active_workflow") == "sisu_workflow":
-                active_step_agent = sisu_agent
-        elif profile_state.get("active_workflow") == "prouni_workflow":
-                active_step_agent = prouni_agent
+            workflow_obj = workflow_registry["onboarding_workflow"]
+            # Enforce state consistency
+            if active_workflow_name != "onboarding_workflow":
+                updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "onboarding_workflow"})
+                active_workflow_name = "onboarding_workflow" 
         
-        if active_workflow_obj:
-                # Check Step - Pass the Cached State!
-                active_step_agent = active_workflow_obj.get_agent_for_user(user_id, current_state=profile_state)
+        elif active_workflow_name in workflow_registry:
+            workflow_obj = workflow_registry[active_workflow_name]
         
-        # --- CONTEXT ISOLATION ---
-        # Set the active workflow on the session to isolate chat history
-        try:
-            # We need to access the session instance. Assuming session_service manages one per user/session_id.
-            # Since session_service.get_session is async, we may need to await it or rely on cache if allowed.
-            # However, session_service is global. 
-            # Let's await it to be safe, though purely synchronous might be needed if inside a non-async loop part? 
-            # No, run_workflow is async.
-            
-            # Determine workflow tag
-            workflow_tag = None
-            if active_workflow_obj:
-                    workflow_tag = active_workflow_obj.name
-            elif active_step_agent:
-                    # For direct agents (Sisu/Prouni/Match)
-                    if profile_state.get("active_workflow") in ["sisu_workflow", "prouni_workflow", "match_workflow"]:
-                        workflow_tag = profile_state.get("active_workflow")
-            
-            # Retrieve and update session
-            current_session = await session_service.get_session(app_name="cloudinha-agent", session_id=session_id, user_id=user_id)
-            if hasattr(current_session, "active_workflow"):
-                    print(f"[DEBUG ISOLATION] Setting session active_workflow to: {workflow_tag}")
-                    current_session.active_workflow = workflow_tag
-                    print(f"[DEBUG ISOLATION] Session object: {id(current_session)}, Verified active_workflow: {current_session.active_workflow}")
-                    # Clear local message cache if workflow changed? 
-                    # SupabaseSession load() handles this if logic is robust, but explicit reload might be needed if cache persists.
-                    # For now, let's rely on load() being called by Runner.
-                    
-        except Exception as e:
-            print(f"Error setting session workflow context: {e}")
-
-        if active_step_agent:
-                # For workflow objects, log the name
-                workflow_name = active_workflow_obj.name if active_workflow_obj else "direct_agent"
-                print(f"[Workflow] User {user_id} in workflow '{workflow_name}' step: {active_step_agent.name}")
-                
-                # --- DYNAMIC TOOL WRAPPER & LEARNING LOOP ---
-                # We create a fresh instance to ensure clean state if needed, though mostly stateless.
-                # We create a fresh instance to ensure clean state if needed, though mostly stateless.
-                
-                # 1. Retrieve Learning Examples
-                user_query_text = ""
-                if new_message.parts and new_message.parts[0].text:
-                    user_query_text = new_message.parts[0].text
-                
-                # Map agent to category (simple mapping)
-                intent_cat = "general"
-                if "sisu" in active_step_agent.name: intent_cat = "sisu"
-                elif "prouni" in active_step_agent.name: intent_cat = "prouni"
-                elif "match" in active_step_agent.name: intent_cat = "match_search"
-                
-                examples = retrieve_similar_examples(user_query_text, intent_cat)
-                
-                step_agent_instance = LlmAgent(
-                    model=active_step_agent.model,
-                    name=active_step_agent.name,
-                    description=active_step_agent.description,
-                    instruction=f"USER_ID_CONTEXT: {user_id}\n" + active_step_agent.instruction + examples,
-                    tools=active_step_agent.tools,
-                    output_key=active_step_agent.output_key
-                )
-                
-                step_runner = Runner(
-                agent=step_agent_instance,
-                app_name="cloudinha-agent",
-                session_service=session_service
-                )
-                
-                # Yield Manual Start Event for the Specialized Agent
-                # This makes "Perguntando pro Especialista Sisu" appear in the UI even if no inner tools are used.
-                yield {
-                    "type": "tool_start",
-                    "tool": active_step_agent.name,
-                    "args": {"workflow": workflow_name}
-                }
-
-                async for event in step_runner.run_async(
-                user_id=user_id,
-                session_id=session_id,
-                new_message=current_message
-                ):
-                    yield event
-                
-                # Yield Manual End Event
-                yield {
-                    "type": "tool_end",
-                    "tool": active_step_agent.name,
-                    "output": "Resposta gerada"
-                }
-                
-                # Check Transition
-                if active_workflow_obj:
-                    # [OPTIMIZATION] Pass cached state to avoid redundant fetch
-                    next_step_agent = active_workflow_obj.get_agent_for_user(user_id, current_state=profile_state)
-                    
-                    if next_step_agent and next_step_agent.name != active_step_agent.name:
-                        # Step Advanced
-                        print(f"[DEBUG] State Advanced in {active_workflow_obj.name}! Triggering {next_step_agent.name}")
-                        # Force next agent to speak
-                        current_message = Content(role="user", parts=[Part(text="(System: Previous step completed. Proceed to next step immediately.)")])
-                        
-                    elif next_step_agent is None:
-                        # Workflow Finished
-                        print(f"[DEBUG] Workflow {active_workflow_obj.name} Complete!")
-                        
-                        updates = {}
-                        if active_workflow_obj.name == "onboarding_workflow":
-                            updates["onboarding_completed"] = True
-                            print(f"[Workflow] Onboarding Complete. Breaking loop to allow Client Trigger.")
-                            if updates:
-                                updateStudentProfileTool(user_id=user_id, updates=updates)
-                            break # Stop here. Let client send the trigger message.
-                            
-                        elif active_workflow_obj.name == "match_workflow":
-                            updates["active_workflow"] = None 
-                            # Let Root Agent handle "What's next?"
-                            current_message = Content(role="user", parts=[Part(text="(System: Match flow complete. Ask if user needs anything else.)")])
-                        
-                        if updates:
-                            updateStudentProfileTool(user_id=user_id, updates=updates)
-                            
-                    else:
-                        # Same Step (Validation failed or question asked)
-                        print(f"[DEBUG] Stalled in {active_step_agent.name}. Waiting for user.")
-                        break
-                else:
-                    # Direct Agent (Sisu/Prouni) handling
-                    # Check if they cleared the flag
-                    new_profile = getStudentProfileTool(user_id)
-                    if new_profile.get("active_workflow") != profile_state.get("active_workflow"):
-                        print(f"[DEBUG] Direct Agent {active_step_agent.name} cleared active_workflow.")
-                        # Loop will continue. If None -> Root Agent next turn.
-                    else:
-                        # Workflow/Agent persisted state. End turn.
-                        print(f"[DEBUG] Direct Agent {active_step_agent.name} continuing.")
-                        break
-
-        elif active_workflow_obj:
-                # Workflow Object Active but no agent returned?
-                # Cleanup to avoid infinite loop
-                updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
-                break
-
         else:
-                # --- Root Agent (Default) ---
-                # from google.adk.agents import LlmAgent (Removed - Global now)
-                
-                # 1. Retrieve Learning Examples for Root
-                user_query_text = ""
-                if new_message.parts and new_message.parts[0].text:
-                    user_query_text = new_message.parts[0].text
-                    
-                examples = retrieve_similar_examples(user_query_text, "general_qa")
-                
-                root_instance = LlmAgent(
-                    model=root_agent.model,
-                    name=root_agent.name,
-                    description=root_agent.description,
-                    instruction=f"USER_ID_CONTEXT: {user_id}\n" + root_agent.instruction + examples,
-                    # sub_agents=root_agent.sub_agents, # Removed to avoid ownership conflict (prouni/sisu are global singletons)
-                    tools=root_agent.tools
-                    # output_key defaults to none
-                )
+            workflow_obj = root_workflow # Default
 
-                root_runner = Runner(
-                agent=root_instance,
-                app_name="cloudinha-agent",
-                session_service=session_service
-                )
-                
-                async for event in root_runner.run_async(
-                    user_id=user_id,
-                    session_id=session_id,
-                    new_message=current_message 
-                ):
-                    yield event
-                
-                # --- CHECK FOR STATE CHANGE ---
-                # If Root Agent triggered a workflow switch (e.g. to "sisu_workflow"), 
-                # we should NOT break. We should CONTINUE the loop so the specialized agent runs immediately.
-                
-                final_profile_state = getStudentProfileTool(user_id)
-                new_workflow = final_profile_state.get("active_workflow")
-                old_workflow = profile_state.get("active_workflow")
-                
-                if new_workflow != old_workflow and new_workflow is not None:
-                    print(f"[Workflow] Root Agent switched context to '{new_workflow}'. CONTINUING loop.")
-                    
-                    # Update local state for the next iteration
-                    profile_state = final_profile_state
-
-                    # We expect Root Agent to be silent (per instructions), so we just flow into the next agent.
-                    # Force a system trigger for the next agent? 
-                    # Usually the next agent takes the original 'new_message' or we can give it a nudge.
-                    # But let's just let the loop re-evaluate. 
-                    # The next agent will see the user's last message? 
-                    # Ideally we want the next agent to greet or answer.
-                    # Let's inject a "handoff" message to the next agent if needed, or rely on its instructions.
-                    
-                    # To ensure the next agent responds to the *original* query (e.g. "E o Sisu?"), 
-                    # we might need to preserve 'current_message'. 
-                    # 'current_message' is still 'new_message' at this point in the loop structure regarding Root Agent usage.
-                    # So it should be fine.
-                    continue
-                
-                break
-
-                break
+        # 2. Get Agent from Workflow
+        # Pass copy of state to be safe? getStudentProfileTool returns dict.
+        agent = workflow_obj.get_agent_for_user(user_id, profile_state)
         
+        if not agent:
+             # Workflow returned None, meaning it's done or yielded without agent
+             # For Onboarding, this means complete. for Match, handled internally.
+             # If we are here, essentially we break or fallback to Root?
+             # If Onboarding finished, we break loop to let user reply?
+             print(f"[RunWorkflow] Workflow {workflow_obj.name} returned NO agent. Ending turn.")
+             break
+
+        print(f"[RunWorkflow] Executing agent: {agent.name} (Workflow: {workflow_obj.name})")
+
+        # 3. Dynamic RAG / Instruction Injection
+        # We need to inject examples. Identify category.
+        intent_cat = "general_qa"
+        if "sisu" in agent.name: intent_cat = "sisu"
+        elif "prouni" in agent.name: intent_cat = "prouni"
+        elif "match" in agent.name: intent_cat = "match_search"
+        
+        user_query_text = current_message.parts[0].text if current_message.parts else ""
+        examples = retrieve_similar_examples(user_query_text, intent_cat)
+        
+        # Create Runner Instance (Clone agent with new instruction)
+        # Note: We append examples to existing instruction.
+        # This handles the "context injection" done by MatchWorkflow too (it appended to instruction).
+        runnable_agent = LlmAgent(
+            model=agent.model,
+            name=agent.name,
+            description=agent.description,
+            instruction=f"USER_ID_CONTEXT: {user_id}\n" + agent.instruction + "\n" + examples,
+            tools=agent.tools,
+            output_key=agent.output_key
+        )
+
+        runner = Runner(agent=runnable_agent, app_name="cloudinha-agent", session_service=session_service)
+
+        # 4. Run Agent & Emit/Capture Events
+        
+        # Emit "On Start" events
+        async for start_event in workflow_obj.on_runner_start(agent):
+             yield start_event
+
+        yield {"type": "tool_start", "tool": agent.name, "args": {"workflow": workflow_obj.name}}
+        
+        captured_output = ""
+        
+        # Retry logic for agent execution
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=current_message):
+                    # Transform/Filter
+                    final_event = workflow_obj.transform_event(event, agent.name)
+                    
+                    if final_event:
+                        if hasattr(final_event, 'text') and final_event.text:
+                            captured_output += final_event.text
+                        elif isinstance(final_event, dict) and final_event.get("output"):
+                            captured_output += final_event.get("output", "")
+                        
+                        yield final_event
+                    else:
+                         if hasattr(event, 'text') and event.text:
+                             captured_output += event.text
+                         elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
+                             for p in event.content.parts:
+                                 if hasattr(p, 'text') and p.text: captured_output += p.text
+                
+                # If we finish the loop without error, break the retry loop
+                break
+            
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError, ConnectionError, TimeoutError, OSError) as e:
+                print(f"[RunWorkflow] Attempt {attempt+1}/{max_retries} failed: {e}")
+                if attempt == max_retries - 1:
+                    yield {"type": "error", "message": "Estou com dificuldades de conexão. Tente novamente."}
+                    # We might want to break or continue? If we break, we exit the step.
+                    # If we don't re-raise, we proceed to 'handle_step_completion' with whatever captured_output we have.
+                    break
+                
+                # Backoff
+                await asyncio.sleep(2 ** attempt)
+                # Continue to next attempt (restart runner.run_async)
+                # Note: captured_output might have partial data. 
+                # Ideally we reset it? 
+                captured_output = "" 
+                # Also, we might have yielded partial events.
+
+
+        yield {"type": "tool_end", "tool": agent.name, "output": "Step Completed"}
+        
+        # 5. Handle Completion / Transitions
+        updates = workflow_obj.handle_step_completion(user_id, profile_state, captured_output)
+        
+        state_changed = False
+        if updates:
+            updateStudentProfileTool(user_id=user_id, updates=updates)
+            profile_state.update(updates) # Local Update
+            state_changed = True
+            
+            # Check for Workflow Switch/Termination/Turn End
+            new_workflow = updates.get("active_workflow")
+            is_turn_complete = updates.get("_is_turn_complete")
+
+            # 1. Check if workflow exited
+            if "active_workflow" in updates and new_workflow is None:
+                 print("[RunWorkflow] Workflow exited explicitly (None). Ending turn.")
+                 break
+            
+            # 2. Check if turn is marked as complete
+            if is_turn_complete:
+                 print("[RunWorkflow] Turn marked as complete by workflow. Ending turn.")
+                 break
+
+            if "active_workflow" in updates:
+                 print(f"[RunWorkflow] State update triggered workflow change: {new_workflow}")
+                 # Loop will continue and pick up new workflow
+                 pass
+
         steps_run += 1
+        
+        # Termination conditions to avoid infinite loops if no state change?
+        # If agent ran and no state change, usually we break (waiting for user input).
+        # EXCEPT if the agent *internally* decided to continue?
+        # Standard ADK Agent usually implies turn end unless we chain.
+        # MatchWorkflow: Reasoning -> Response chain was handled by "state change" (_match_phase).
+        # So we continue loop.
+        
+        # But if Standard Agent (Root/Sisu) ran, we should break.
+        if not state_changed and not updates:
+             break
+
+        # If we looped MAX times
+        if steps_run >= MAX_STEPS:
+            print("[RunWorkflow] Max steps reached.")

@@ -1,6 +1,7 @@
 from typing import Optional, Dict, Any, List, Union
 import json
 from src.lib.supabase import supabase
+from src.lib.error_handler import safe_execution
 
 # Cache for state mappings
 _STATES_CACHE = {}
@@ -118,11 +119,10 @@ def standardize_city(city_input: str) -> Optional[Dict[str, str]]:
     
     return None
 
+@safe_execution(error_type="tool_error", default_return='{"success": false, "error": "Erro ao atualizar perfil."}')
 def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
     """Atualiza os dados do aluno durante a conversa."""
     
-
-
     print(f"!!! [DEBUG TOOL] updateStudentProfileTool CALLED with user_id={user_id}, updates={updates}")
     
     results = {
@@ -163,13 +163,16 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
         data["id"] = user_id
         
         # Use upsert to ensure row exists
+        # Removed try/catch, rely on safe_execution
+        response = supabase.table("user_profiles").upsert(data, on_conflict="id").execute()
+        print(f"!!! [DEBUG WRITE] Update response: {response}")
+        results["profile_updated"] = True 
+        
+        # Invalidate cache
         try:
-            response = supabase.table("user_profiles").upsert(data, on_conflict="id").execute()
-            print(f"!!! [DEBUG WRITE] Update response: {response}")
-            results["profile_updated"] = True 
-        except Exception as e:
-            print(f"!!! [ERROR WRITE] Update FAILED: {e}")
-            results["errors"].append(str(e))
+            from src.tools.getStudentProfile import invalidate_profile_cache
+            invalidate_profile_cache(user_id)
+        except ImportError:
+            pass # Avoid circular dependency crash if any, though structure seems fine
 
     return json.dumps({"success": True, **results}, ensure_ascii=False)
-
