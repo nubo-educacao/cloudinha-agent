@@ -47,7 +47,8 @@ Examples: "busque com minhas preferências", "me mostre resultados", "acabei de 
 - State → `state_preference`
 - "sisu" or "prouni" → `program_preference`
 - ENEM score → `enem_score`
-- Shift (noturno/integral) → `preferred_shifts`
+- ENEM score → `enem_score`
+- Shift (noturno/integral/ead) → `preferred_shifts` (if user says "EAD" or "distância", put "EAD" here!)
 
 ---
 
