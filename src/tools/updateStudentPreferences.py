@@ -35,8 +35,8 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     Args:
         user_id: ID do usuário (pode ser "user" para debug locais).
         updates: Dicionário contendo os campos a atualizar. 
-                 Chaves comuns: 'course_interest', 'enem_score', 'preferred_shifts', 'city_name', 
-                 'university_preference', 'program_preference', 'quota_types', 'per_capita_income',
+                 Chaves comuns: 'course_interest', 'enem_score', 'preferred_shifts' (use ['EAD'] se o usuário pedir EAD), 
+                 'city_name', 'university_preference', 'program_preference', 'quota_types', 'per_capita_income',
                  'state_preference'.
     """
     
@@ -125,6 +125,20 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
         lower = clean.lower()
         if "não sei" in lower or "indeciso" in lower or "ainda não" in lower:
             return []
+            
+        # [NEW] Detect EAD in course string and mark for shift update
+        nonlocal preferences_updates
+        if "ead" in lower:
+            existing_shifts = preferences_updates.get("preferred_shifts", [])
+            # Map EAD to the correct Database Value
+            db_ead_value = "Curso a distância"
+            if db_ead_value not in existing_shifts:
+                existing_shifts.append(db_ead_value)
+                preferences_updates["preferred_shifts"] = existing_shifts
+                print(f"!!! [EAD DETECTED] Adding '{db_ead_value}' to shifts and cleaning course name")
+            # Remove 'ead' from the string to avoid saving it as a course
+            clean = re.sub(r'\bead\b', '', clean, flags=re.IGNORECASE).strip()
+
         parts = re.split(r'\s*[,;/]\s*|\s+e\s+|\s+ou\s+', clean, flags=re.IGNORECASE)
         db_courses = get_course_names_from_db()
         courses = []
@@ -184,6 +198,14 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     if "state_preference" in updates:
         raw_state = updates["state_preference"]
         normalized_state = standardize_state(raw_state)
+        
+        # [NEW] If state is specified but NOT city, clear city and coordinates
+        if "city_name" not in updates and "location_preference" not in updates:
+            print(f"!!! [STATE UPDATE] Clearing previous city/coords to search in {normalized_state or raw_state}")
+            preferences_updates["location_preference"] = None
+            preferences_updates["device_latitude"] = None
+            preferences_updates["device_longitude"] = None
+
         if normalized_state:
             preferences_updates["state_preference"] = normalized_state
             print(f"!!! [STATE STANDARDIZED] '{raw_state}' -> '{normalized_state}'")
@@ -230,14 +252,27 @@ def updateStudentPreferencesTool(user_id: str, updates: Dict[str, Any]) -> str:
     # --- 4. Shift Normalization ---
     def normalize_shift_value(val: str) -> str:
         lower = val.lower().strip()
-        if 'EAD' in lower or 'Curso a distância' in lower:
-            return 'EAD'
+        if 'ead' in lower or 'curso a distância' in lower or 'distância' in lower or 'distancia' in lower:
+            return 'Curso a distância'
         shift_map = {
             'matutino': 'Matutino',
+            'manhã': 'Matutino',
+            'manha': 'Matutino',
             'vespertino': 'Vespertino',
+            'tarde': 'Vespertino',
             'noturno': 'Noturno',
-            'integral': 'Integral'
+            'noite': 'Noturno',
+            'integral': 'Integral',
+            'dia todo': 'Integral',
+            'diurno': 'Integral' # Often confused, but usually means full day or matutino/vespertino. Defaulting to Integral or maybe we should map to Matutino? 
+                                 # Checking DB, usually Integral is specific. Let's map 'dia todo' to Integral.
         }
+        # Fuzzy check for partial matches if direct lookup fails
+        if 'manh' in lower: return 'Matutino'
+        if 'tarde' in lower: return 'Vespertino'
+        if 'noite' in lower or 'notur' in lower: return 'Noturno'
+        if 'integral' in lower: return 'Integral'
+        
         return shift_map.get(lower, val)
 
     if "shift" in updates or "preferred_shifts" in updates:

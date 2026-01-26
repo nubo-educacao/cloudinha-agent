@@ -64,21 +64,10 @@ def searchOpportunitiesTool(
         except:
              pass
 
-    # !!! CRITICAL LOGIC !!!
-    if user_lat is not None and user_long is not None:
-         # Check if we should enforce proximity
-         is_preference_city = False
-         pref_city = profile.get("location_preference")
-         if final_city_names and pref_city and len(final_city_names) == 1 and final_city_names[0] == pref_city:
-             is_preference_city = True
-             
-         if not final_city_names or is_preference_city:
-             print(f"[DEBUG] Using Lat/Long ({user_lat}, {user_long}) for Proximity Search. Clearing city filter only.")
-             final_city_names = None
-             # NOTE: Keep final_state_names - user's state preference should still apply
-    else:
-         print(f"[DEBUG] No Lat/Long available. Using Text Search: {final_city_names}")
-            
+    # [REMOVED] Enforce proximity / Clear city filter logic
+    # We are disabling proximity search for now to avoid database timeouts
+    print(f"[DEBUG] Location Context: Lat/Long={user_lat}/{user_long}, Cities={final_city_names}")
+    
     # 3. Consolidate Filters (Prioritize Profile/Preferences)
     if per_capita_income is None:
         per_capita_income = profile.get("per_capita_income")
