@@ -332,6 +332,70 @@ async def chat_endpoint(request: ChatRequest):
     from fastapi.responses import StreamingResponse
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
+
+# === WHATSAPP WEBHOOKS ===
+from fastapi import Request, BackgroundTasks, HTTPException
+from src.agent.config import WHATSAPP_VERIFY_TOKEN
+from src.agent.whatsapp_handler import handle_whatsapp_message
+
+@app.get("/whatsapp/webhook")
+async def verify_webhook(request: Request):
+    """
+    Handles Webhook Verification Challenge from Meta.
+    """
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    if mode and token:
+        if mode == "subscribe" and token == WHATSAPP_VERIFY_TOKEN:
+            logger.info("WhatsApp Webhook Verified!")
+            return int(challenge)
+        else:
+            raise HTTPException(status_code=403, detail="Verification failed")
+    
+    return {"status": "error", "message": "Missing parameters"}
+
+@app.post("/whatsapp/webhook")
+async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Receives WhatsApp events.
+    Returns 200 OK immediately and processes in background.
+    """
+    try:
+        data = await request.json()
+        
+        # Log structure for debugging
+        # logger.info(f"WhatsApp Incoming: {json.dumps(data, indent=2)}")
+
+        # Check if it's a message
+        if data.get("object") == "whatsapp_business_account":
+            for entry in data.get("entry", []):
+                for change in entry.get("changes", []):
+                    value = change.get("value", {})
+                    
+                    if "messages" in value:
+                        for message in value.get("messages", []):
+                            if message.get("type") == "text":
+                                phone_number = message.get("from") # e.g. "5511999999999"
+                                text_body = message.get("text", {}).get("body")
+                                message_id = message.get("id")
+                                
+                                logger.info(f"Received WhatsApp message from {phone_number}")
+                                
+                                # Process in background
+                                background_tasks.add_task(
+                                    handle_whatsapp_message, 
+                                    phone_number, 
+                                    text_body, 
+                                    message_id
+                                )
+
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
