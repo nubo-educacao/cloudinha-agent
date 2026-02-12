@@ -8,12 +8,13 @@ import re
 import json
 
 # Define the Prompt
+# Define the Prompt
 ROUTER_INSTRUCTION = """
 Você é o Roteador Central da Cloudinha (Assistente Educacional).
 Sua função é APENAS CLASSIFICAR a intenção do usuário para decidir qual fluxo deve estar ativo.
 
 **Contexto Atual:**
-(O estado atual será fornecido na mensagem do usuário).
+(O estado atual e o **HISTÓRICO RECENTE DE MENSAGENS** serão fornecidos).
 
 **Workflows Disponíveis:**
 1. `match_workflow`: O usuário quer **BUSCAR/VER/FILTRAR** faculdades ou bolsas (AÇÃO).
@@ -59,7 +60,17 @@ Sua função é APENAS CLASSIFICAR a intenção do usuário para decidir qual fl
     - De dúvida para ação → `match_workflow`
     - De qualquer um para Técnico/Meta → `None` (EXIT_WORKFLOW se já estiver em um, ou apenas target null)
     
-- **CONTINUIDADE**: Se a mensagem é uma resposta direta de dado (ex: "1000", "Engenharia", "São Paulo"), mantenha o workflow atual (`CONTINUE_WORKFLOW`).
+- **CONTINUIDADE (CRÍTICO - ANALISE O HISTÓRICO)**:
+    - **LEIA O HISTÓRICO DE MENSAGENS FORNECIDO**.
+    - Se a **ÚLTIMA MENSAGEM DO BOT** foi uma pergunta, e a mensagem ATUAL do usuário é a RESPOSTA, mantenha o workflow (`CONTINUE_WORKFLOW`).
+    - Ex: 
+      Bot: "Que curso você quer?" 
+      Usuário: "Arquitetura" 
+      -> `CONTINUE_WORKFLOW`.
+    - Ex:
+      Bot: "Qual sua nota?"
+      Usuário: "600"
+      -> `CONTINUE_WORKFLOW`.
 
 - **SAÍDA**: "Sair", "Cancelar", "Voltar" → `EXIT_WORKFLOW`.
 
@@ -68,26 +79,14 @@ Sua função é APENAS CLASSIFICAR a intenção do usuário para decidir qual fl
 📌 **ACIONAL → match_workflow:**
 - "Quero ver faculdades de direito" → CHANGE_WORKFLOW, match_workflow
 - "Buscar bolsas na minha cidade" → CHANGE_WORKFLOW, match_workflow
-- "Quais as melhores oportunidades do SISU?" → CHANGE_WORKFLOW, match_workflow
-- "Me mostre vagas do PROUNI" → CHANGE_WORKFLOW, match_workflow
 
 📌 **INFORMACIONAL → sisu/prouni_workflow:**
 - "O que é nota de corte?" → CHANGE_WORKFLOW, sisu_workflow
 - "Como funciona a lista de espera do PROUNI?" → CHANGE_WORKFLOW, prouni_workflow
-- "Quando abrem inscrições?" → Depende do contexto (sisu ou prouni)
-- "Quem criou o SISU?" → CHANGE_WORKFLOW, sisu_workflow
 
-📌 **TÉCNICO (META) → None (Root Agent):**
-- "Como você funciona?" → EXIT_WORKFLOW (se estiver num workflow) ou CHANGE_WORKFLOW target=null
-- "Qual sua arquitetura?" → EXIT_WORKFLOW 
-
-📌 **CONTINUIDADE:**
-- "1500 reais" (respondendo renda no match) → CONTINUE_WORKFLOW
-- "Engenharia" (respondendo curso no match) → CONTINUE_WORKFLOW
-- "Sim, tenho interesse" → CONTINUE_WORKFLOW
-
-📌 **SAÍDA:**
-- "Sair", "Cancelar", "Tchau" → EXIT_WORKFLOW
+📌 **CONTINUIDADE (OLHANDO HISTÓRICO):**
+- Histórico Bot: "Qual seu curso?" | Atual User: "Direito" → CONTINUE_WORKFLOW
+- Histórico Bot: "Qual sua renda?" | Atual User: "1500" → CONTINUE_WORKFLOW
 
 **Saída Obrigatória (JSON):**
 Você NÃO deve conversar. Apenas retorne um JSON estrito:
@@ -95,7 +94,7 @@ Você NÃO deve conversar. Apenas retorne um JSON estrito:
   "intent": "CHANGE_WORKFLOW" | "CONTINUE_WORKFLOW" | "EXIT_WORKFLOW",
   "target_workflow": "match_workflow" | "sisu_workflow" | "prouni_workflow" | null,
   "confidence": "high" | "medium" | "low",
-  "reasoning": "Breve explicação da decisão (mencione se foi ACIONAL ou INFORMACIONAL)."
+  "reasoning": "Explique com base no HISTÓRICO se é uma continuação/resposta ou mudança."
 }
 """
 
@@ -109,13 +108,16 @@ router_agent = LlmAgent(
 )
 
 @safe_execution(error_type="router_error", default_return={})
-async def execute_router_agent(user_id: str, session_id: str, message_text: str, profile_state: dict) -> dict:
+async def execute_router_agent(user_id: str, session_id: str, message_text: str, profile_state: dict, recent_history: str = None) -> dict:
     """
     Executes the router agent logic and returns the decision dictionary.
     """
     # Prepare Context for Router
-    router_input_text = f"MENSAGEM: {message_text}\n\nESTADO ATUAL:\nactive_workflow: {profile_state.get('active_workflow')}\nonboarding_completed: {profile_state.get('onboarding_completed')}"
+    router_input_text = f"MENSAGEM ATUAL DO USUÁRIO: {message_text}\n\nESTADO ATUAL:\nactive_workflow: {profile_state.get('active_workflow')}\nonboarding_completed: {profile_state.get('onboarding_completed')}"
     
+    if recent_history:
+        router_input_text += f"\n\n=== HISTÓRICO RECENTE (Contexto) ===\n{recent_history}\n====================================="
+
     router_msg = Content(role="user", parts=[Part(text=router_input_text)])
     
     transient_session_service = InMemorySessionService()
