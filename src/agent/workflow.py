@@ -56,7 +56,34 @@ async def run_workflow(
     # Only run Router if onboarding is complete
     if profile_state.get("onboarding_completed"):
         msg_text = new_message.parts[0].text if new_message.parts else ""
-        decision = await execute_router_agent(user_id, session_id, msg_text, profile_state)
+        
+        # [Fix] Fetch Recent History (Last 5 messages) for Context
+        recent_history_str = ""
+        try:
+            # We access the session to get history
+            session = await session_service.get_session("cloudinha-agent", session_id, user_id)
+            # Ensure history is loaded
+            history = session.load() 
+            
+            # Get last 5 messages
+            last_messages = history[-5:] if history else []
+            
+            history_lines = []
+            for m in last_messages:
+                role_label = "Usuário" if m.role == "user" else "Cloudinha (Bot)"
+                txt = ""
+                if m.parts:
+                    for p in m.parts:
+                        if p.text: txt += p.text
+                if txt:
+                    history_lines.append(f"{role_label}: {txt}")
+            
+            recent_history_str = "\n".join(history_lines)
+
+        except Exception as e:
+            print(f"[RunWorkflow] Context Fetch Error: {e}")
+
+        decision = await execute_router_agent(user_id, session_id, msg_text, profile_state, recent_history=recent_history_str)
         
         if decision:
              intent = decision.get("intent")
