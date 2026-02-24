@@ -22,7 +22,7 @@ def check_profile_complete(state: Dict[str, Any]) -> bool:
     """
     has_name = bool(state.get("full_name"))
     has_age = state.get("age") is not None
-    has_city = bool(state.get("city_name"))
+    has_city = bool(state.get("city_name") or state.get("registered_city_name") or state.get("city"))
     has_education = bool(state.get("education"))
 
     # Debug logs
