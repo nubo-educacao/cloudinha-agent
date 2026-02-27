@@ -20,3 +20,5 @@ opentelemetry-sdk
 opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-httpx
 httpx
+sqlalchemy
+psycopg2-binary

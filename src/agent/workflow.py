@@ -18,13 +18,15 @@ import logging
 from src.agent.base_workflow import SingleAgentWorkflow
 from src.agent.onboarding_workflow import onboarding_workflow
 from src.agent.match_workflow import MatchWorkflow
+from src.agent.passport_workflow import PassportWorkflow
 
 # Initialize Registry
 workflow_registry = {
     "match_workflow": MatchWorkflow(),
     "sisu_workflow": SingleAgentWorkflow(sisu_agent, "sisu_workflow"),
     "prouni_workflow": SingleAgentWorkflow(prouni_agent, "prouni_workflow"),
-    "onboarding_workflow": onboarding_workflow
+    "onboarding_workflow": onboarding_workflow,
+    "passport_workflow": PassportWorkflow()
 }
 
 # Wrapper for Root (Default)
@@ -52,37 +54,45 @@ async def run_workflow(
     # 0. Fetch Initial State
     profile_state = getStudentProfileTool(user_id)
     
-    # Pre-loop Router check (Steps == 0 logic)
-    # Only run Router if onboarding is complete
-    if profile_state.get("onboarding_completed"):
-        msg_text = new_message.parts[0].text if new_message.parts else ""
+    # Pre-loop Router check
+    # Run Router for ALL users (passport_workflow handles onboarding internally)
+    msg_text = new_message.parts[0].text if new_message.parts else ""
+    
+    # [Fix] Fetch Recent History (Last 5 messages) for Context
+    recent_history_str = ""
+    try:
+        session = await session_service.get_session("cloudinha-agent", session_id, user_id)
+        history = session.load() 
+        last_messages = history[-5:] if history else []
         
-        # [Fix] Fetch Recent History (Last 5 messages) for Context
-        recent_history_str = ""
-        try:
-            # We access the session to get history
-            session = await session_service.get_session("cloudinha-agent", session_id, user_id)
-            # Ensure history is loaded
-            history = session.load() 
-            
-            # Get last 5 messages
-            last_messages = history[-5:] if history else []
-            
-            history_lines = []
-            for m in last_messages:
-                role_label = "Usuário" if m.role == "user" else "Cloudinha (Bot)"
-                txt = ""
-                if m.parts:
-                    for p in m.parts:
-                        if p.text: txt += p.text
-                if txt:
-                    history_lines.append(f"{role_label}: {txt}")
-            
-            recent_history_str = "\n".join(history_lines)
+        history_lines = []
+        for m in last_messages:
+            role_label = "Usuário" if m.role == "user" else "Cloudinha (Bot)"
+            txt = ""
+            if m.parts:
+                for p in m.parts:
+                    if p.text: txt += p.text
+            if txt:
+                history_lines.append(f"{role_label}: {txt}")
+        
+        recent_history_str = "\n".join(history_lines)
 
-        except Exception as e:
-            print(f"[RunWorkflow] Context Fetch Error: {e}")
+    except Exception as e:
+        print(f"[RunWorkflow] Context Fetch Error: {e}")
 
+    # Migrate legacy workflows to passport_workflow
+    # Users who had match_workflow/sisu_workflow/prouni_workflow as active should go through passport_workflow now
+    LEGACY_WORKFLOWS = {"match_workflow", "sisu_workflow", "prouni_workflow", "onboarding_workflow"}
+    active_wf = profile_state.get("active_workflow")
+    if active_wf in LEGACY_WORKFLOWS:
+        print(f"[RunWorkflow] Migrating legacy workflow '{active_wf}' -> 'passport_workflow'")
+        updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "passport_workflow"})
+        profile_state = getStudentProfileTool(user_id)
+        active_wf = "passport_workflow"
+
+    # Only run router if user already has an active workflow (to decide CONTINUE vs CHANGE)
+    # For brand new users, we default to passport_workflow below
+    if active_wf:
         decision = await execute_router_agent(user_id, session_id, msg_text, profile_state, recent_history=recent_history_str)
         
         if decision:
@@ -100,6 +110,10 @@ async def run_workflow(
                  updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
                  profile_state = getStudentProfileTool(user_id) # Refresh
                  yield {"type": "tool_end", "tool": "RouterAgent", "output": "Exited workflow"}
+    else:
+        # No active workflow — default to passport_workflow
+        updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "passport_workflow"})
+        profile_state = getStudentProfileTool(user_id)
 
     # Main Loop
     MAX_STEPS = 10
@@ -112,18 +126,12 @@ async def run_workflow(
         active_workflow_name = profile_state.get("active_workflow")
         workflow_obj = None
 
-        if not profile_state.get("onboarding_completed"):
-            workflow_obj = workflow_registry["onboarding_workflow"]
-            # Enforce state consistency
-            if active_workflow_name != "onboarding_workflow":
-                updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "onboarding_workflow"})
-                active_workflow_name = "onboarding_workflow" 
-        
-        elif active_workflow_name in workflow_registry:
+        # passport_workflow is the default entry point for everything
+        # It handles onboarding internally
+        if active_workflow_name in workflow_registry:
             workflow_obj = workflow_registry[active_workflow_name]
-        
         else:
-            workflow_obj = root_workflow # Default
+            workflow_obj = root_workflow # Fallback
 
         # 2. Get Agent from Workflow
         # Pass copy of state to be safe? getStudentProfileTool returns dict.

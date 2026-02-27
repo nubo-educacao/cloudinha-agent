@@ -46,6 +46,12 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 app = FastAPI()
 
+# --- Auto-create missing DB tables on startup ---
+@app.on_event("startup")
+async def on_startup():
+    from src.db.engine import ensure_schema
+    ensure_schema()
+
 # Instrument FastAPI
 FastAPIInstrumentor.instrument_app(app)
 # Instrument HTTPX (captures outgoing requests)

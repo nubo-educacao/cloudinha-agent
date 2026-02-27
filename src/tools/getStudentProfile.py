@@ -43,7 +43,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
     profile_data = None
     # Use simple select and handle list manually to avoid maybe_single 406 issues
     profile_response = supabase.table("user_profiles") \
-        .select("full_name, city, age, education, onboarding_completed, active_workflow") \
+        .select("full_name, city, age, education, onboarding_completed, active_workflow, passport_phase, isdependent, parent_user_id, current_dependent_id") \
         .eq("id", user_id) \
         .execute()
     
@@ -94,6 +94,10 @@ def getStudentProfileTool(user_id: str) -> Dict:
         "user_id": user_id,
         "onboarding_completed": onboarding_completed,
         "active_workflow": profile_data.get("active_workflow") if profile_data else None,
+        "passport_phase": profile_data.get("passport_phase", "INTRO") if profile_data else "INTRO",
+        "isdependent": profile_data.get("isdependent", False) if profile_data else False,
+        "parent_user_id": profile_data.get("parent_user_id") if profile_data else None,
+        "current_dependent_id": profile_data.get("current_dependent_id") if profile_data else None,
         "full_name": profile_data.get("full_name") if profile_data else None,
         "registered_city_name": profile_data.get("city") if profile_data else None,
         "age": profile_data.get("age") if profile_data else None,

@@ -157,6 +157,14 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
         profile_updates["onboarding_completed"] = updates["onboarding_completed"]
     if "active_workflow" in updates:
         profile_updates["active_workflow"] = updates["active_workflow"]
+    if "isdependent" in updates:
+        profile_updates["isdependent"] = updates["isdependent"]
+    if "parent_user_id" in updates:
+        profile_updates["parent_user_id"] = updates["parent_user_id"]
+    if "passport_phase" in updates:
+        profile_updates["passport_phase"] = updates["passport_phase"]
+    if "current_dependent_id" in updates:
+        profile_updates["current_dependent_id"] = updates["current_dependent_id"]
 
     if profile_updates:
         data = profile_updates.copy()
