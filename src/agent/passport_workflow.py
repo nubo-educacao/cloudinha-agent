@@ -7,17 +7,8 @@ from src.agent.config import MODEL_ONBOARDING, MODEL_ROUTER
 from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.getStudentProfile import getStudentProfileTool
 
-# Agent 1: Greeting and Onboarding check
-passport_intro_agent = LlmAgent(
-    model=MODEL_ROUTER,
-    name="passport_intro_agent",
-    description="Handles the introduction to the passport workflow.",
-    instruction="""Você é a Cloudinha. O usuário quer buscar uma oportunidade educacional (bolsa, curso, vaga, etc).
-    Sua missão nesta etapa é APENAS dar as boas-vindas. Diga: "Programas educacionais são muito importantes e a Cloudinha vai te ajudar a entrar na melhor opção. 🌟"
-    Não faça mais NENHUMA pergunta. Não pergunte o nome. Apenas diga a frase de boas-vindas.
-    """,
-    tools=[]
-)
+# Phase 1: Greeting is a scripted message to prevent LLM hallucination
+PASSPORT_INTRO_MESSAGE = "Programas educacionais são muito importantes e eu vou te ajudar a encontrar a melhor opção! 🌟"
 
 from src.tools.processDependentChoice import processDependentChoiceTool
 
@@ -76,6 +67,7 @@ EXEMPLOS:
 REGRA CRÍTICA: SEMPRE chame a ferramenta updateStudentProfileTool ANTES de perguntar o próximo campo.
 Nunca re-pergunte algo que já foi respondido.
 """
+from src.tools.lookupCEP import lookupCEPTool
 
 def _create_dependent_onboarding_agent(dependent_id: str) -> LlmAgent:
     """Creates a dynamic agent instance with the dependent_id injected."""
@@ -84,7 +76,7 @@ def _create_dependent_onboarding_agent(dependent_id: str) -> LlmAgent:
         name="passport_dependent_onboarding_agent",
         description="Collects the dependent's profile information.",
         instruction=f"DEPENDENT_ID_CONTEXT: {dependent_id}\n" + DEPENDENT_ONBOARDING_INSTRUCTION,
-        tools=[updateStudentProfileTool, getStudentProfileTool]
+        tools=[updateStudentProfileTool, getStudentProfileTool, lookupCEPTool]
     )
 
 from src.tools.evaluatePassportEligibility import evaluatePassportEligibilityTool
@@ -123,7 +115,11 @@ class PassportWorkflow(BaseWorkflow):
         
         # Phase 1: Greeting
         if passport_phase == "INTRO":
-            return passport_intro_agent
+            return {
+                "type": "scripted", 
+                "name": "passport_intro",
+                "message": PASSPORT_INTRO_MESSAGE
+            }
             
         # Phase 2: Onboarding Hook
         if passport_phase == "ONBOARDING":

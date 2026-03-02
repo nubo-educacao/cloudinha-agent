@@ -58,24 +58,46 @@ async def run_workflow(
     # Run Router for ALL users (passport_workflow handles onboarding internally)
     msg_text = new_message.parts[0].text if new_message.parts else ""
     
-    # [Fix] Fetch Recent History (Last 5 messages) for Context
+    # [Fix] Fetch Recent History from DB (chat_messages) for full context
     recent_history_str = ""
+    chat_history_for_agent = ""
+    active_wf = profile_state.get("active_workflow")
     try:
         session = await session_service.get_session("cloudinha-agent", session_id, user_id)
-        history = session.load() 
-        last_messages = history[-5:] if history else []
         
-        history_lines = []
-        for m in last_messages:
+        # Agent gets last 20 messages filtered by current workflow
+        if active_wf and hasattr(session, 'load_for_workflow'):
+            workflow_history = session.load_for_workflow(active_wf, limit=20)
+        else:
+            workflow_history = session.load()[-20:] if session.load() else []
+        
+        agent_history_lines = []
+        for m in workflow_history:
+            role_label = "Usuário" if m.role == "user" else "Cloudinha"
+            txt = ""
+            if m.parts:
+                for p in m.parts:
+                    if p.text: txt += p.text
+            if txt:
+                agent_history_lines.append(f"{role_label}: {txt}")
+        
+        if agent_history_lines:
+            chat_history_for_agent = "\nHISTÓRICO DA CONVERSA (últimas mensagens):\n" + "\n".join(agent_history_lines) + "\n---\n"
+        
+        # Router gets last 10 globally for decision making (needs cross-workflow context)
+        all_history = session.load()
+        last_messages_for_router = all_history[-10:] if all_history else []
+        router_history_lines = []
+        for m in last_messages_for_router:
             role_label = "Usuário" if m.role == "user" else "Cloudinha (Bot)"
             txt = ""
             if m.parts:
                 for p in m.parts:
                     if p.text: txt += p.text
             if txt:
-                history_lines.append(f"{role_label}: {txt}")
+                router_history_lines.append(f"{role_label}: {txt}")
         
-        recent_history_str = "\n".join(history_lines)
+        recent_history_str = "\n".join(router_history_lines)
 
     except Exception as e:
         print(f"[RunWorkflow] Context Fetch Error: {e}")
@@ -114,6 +136,8 @@ async def run_workflow(
         # No active workflow — default to passport_workflow
         updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "passport_workflow"})
         profile_state = getStudentProfileTool(user_id)
+        # Ensure it's set in the local dict just in case cache delayed the read
+        profile_state["active_workflow"] = "passport_workflow"
 
     # Main Loop
     MAX_STEPS = 10
@@ -133,18 +157,64 @@ async def run_workflow(
         else:
             workflow_obj = root_workflow # Fallback
 
-        # 2. Get Agent from Workflow
-        # Pass copy of state to be safe? getStudentProfileTool returns dict.
-        agent = workflow_obj.get_agent_for_user(user_id, profile_state)
+        # 2. Get Agent or Scripted Message from Workflow
+        step = workflow_obj.get_agent_for_user(user_id, profile_state)
         
-        if not agent:
-             # Workflow returned None, meaning it's done or yielded without agent
-             # For Onboarding, this means complete. for Match, handled internally.
-             # If we are here, essentially we break or fallback to Root?
-             # If Onboarding finished, we break loop to let user reply?
+        # Handle None — workflow is done
+        if not step:
              print(f"[RunWorkflow] Workflow {workflow_obj.name} returned NO agent. Ending turn.")
              break
 
+        # --- ACTION STEP (deterministic state update, no LLM, processes user input) ---
+        if isinstance(step, dict) and step.get("type") == "action":
+             action_func = step.get("func")
+             action_name = step.get("name", "action_step")
+             print(f"[RunWorkflow] Action step: {action_name} (Workflow: {workflow_obj.name})")
+             
+             user_text = current_message.parts[0].text if current_message.parts else ""
+             
+             if action_func:
+                 action_updates = action_func(user_id, profile_state, user_text)
+                 if action_updates:
+                     db_updates = {k: v for k, v in action_updates.items() if not k.startswith("_")}
+                     if db_updates:
+                         updateStudentProfileTool(user_id=user_id, updates=db_updates)
+                     profile_state.update(action_updates)
+                     
+                     if action_updates.get("_is_turn_complete"):
+                         print("[RunWorkflow] Turn marked as complete by action step.")
+                         break
+             
+             # Loop continues immediately to next step
+             steps_run += 1
+             continue
+
+        # --- SCRIPTED MESSAGE (deterministic output, no LLM) ---
+        if isinstance(step, dict) and step.get("type") == "scripted":
+            scripted_message = step.get("message", "")
+            scripted_name = step.get("name", "scripted_step")
+            print(f"[RunWorkflow] Scripted step: {scripted_name} (Workflow: {workflow_obj.name})")
+            
+            yield SimpleTextEvent(scripted_message)
+            captured_output = scripted_message
+            
+            # Still handle transitions
+            updates = workflow_obj.handle_step_completion(user_id, profile_state, captured_output)
+            if updates:
+                db_updates = {k: v for k, v in updates.items() if not k.startswith("_")}
+                if db_updates:
+                    updateStudentProfileTool(user_id=user_id, updates=db_updates)
+                profile_state.update(updates)
+                
+                if updates.get("_is_turn_complete"):
+                    print("[RunWorkflow] Turn marked as complete by scripted step. Ending turn.")
+                    break
+            
+            steps_run += 1
+            continue
+
+        # --- LLM AGENT ---
+        agent = step
         print(f"[RunWorkflow] Executing agent: {agent.name} (Workflow: {workflow_obj.name})")
 
         # 3. Dynamic RAG / Instruction Injection
@@ -157,14 +227,20 @@ async def run_workflow(
         user_query_text = current_message.parts[0].text if current_message.parts else ""
         examples = retrieve_similar_examples(user_query_text, intent_cat)
         
+        # Inject Profile State context to the selected agent BEFORE it runs
+        profile_context_str = "\nPERFIL ATUAL DO ESTUDANTE:\n"
+        for k, v in profile_state.items():
+            if v is not None and str(v).strip() != "":
+                profile_context_str += f"- {k}: {v}\n"
+        profile_context_str += "\n"
+        
         # Create Runner Instance (Clone agent with new instruction)
-        # Note: We append examples to existing instruction.
-        # This handles the "context injection" done by MatchWorkflow too (it appended to instruction).
+        # Inject: USER_ID_CONTEXT + profile_state + chat history + original instruction + RAG examples
         runnable_agent = LlmAgent(
             model=agent.model,
             name=agent.name,
             description=agent.description,
-            instruction=f"USER_ID_CONTEXT: {user_id}\n" + agent.instruction + "\n" + examples,
+            instruction=f"USER_ID_CONTEXT: {user_id}\n" + profile_context_str + chat_history_for_agent + agent.instruction + "\n" + examples,
             tools=agent.tools,
             output_key=agent.output_key
         )
@@ -211,17 +287,11 @@ async def run_workflow(
                 print(f"[RunWorkflow] Attempt {attempt+1}/{max_retries} failed: {e}")
                 if attempt == max_retries - 1:
                     yield {"type": "error", "message": "Estou com dificuldades de conexão. Tente novamente."}
-                    # We might want to break or continue? If we break, we exit the step.
-                    # If we don't re-raise, we proceed to 'handle_step_completion' with whatever captured_output we have.
                     break
                 
                 # Backoff
                 await asyncio.sleep(2 ** attempt)
-                # Continue to next attempt (restart runner.run_async)
-                # Note: captured_output might have partial data. 
-                # Ideally we reset it? 
                 captured_output = "" 
-                # Also, we might have yielded partial events.
 
 
         yield {"type": "tool_end", "tool": agent.name, "output": "Step Completed"}
@@ -231,7 +301,10 @@ async def run_workflow(
         
         state_changed = False
         if updates:
-            updateStudentProfileTool(user_id=user_id, updates=updates)
+            # Filter out internal flags (prefixed with _) before saving to DB
+            db_updates = {k: v for k, v in updates.items() if not k.startswith("_")}
+            if db_updates:
+                updateStudentProfileTool(user_id=user_id, updates=db_updates)
             profile_state.update(updates) # Local Update
             state_changed = True
             
