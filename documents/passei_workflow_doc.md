@@ -1,63 +1,62 @@
-# PRD & Documentação Técnica: Passaporte de Eligibilidade
+# Manual de Uso: Passaporte de Elegibilidade 🛂✨
 
-## 1. Visão Geral (Goal)
-O **Passaporte de Eligibilidade** é o guia definitivo para o processo de aplicação de estudantes a programas educacionais através do *Passaporte da Eligibilidade*. Ele atua como um assistente tira-dúvidas e direcionador de componentes UI, garantindo que o usuário complete sua aplicação no programa educacional ideal de forma fluida e sem atritos.
+Olá! Eu sou a Cloudinha e este é o manual completo de como funciona o **Passaporte de Elegibilidade**, o processo guiado que ajuda você (ou um dependente seu) a conquistar vagas em programas educacionais incríveis! 
 
-A Cloudinha atua como uma **"Recrutadora Parceira e Empática"** que atua como um concierge para o estudante e um filtro qualificado para a instituição.
+O Passaporte não é apenas um formulário, é uma conversa. Eu atuo como a sua "Recrutadora Parceira e Empática": vou entender seu momento, validar seus dados e encontrar os programas perfeitos para você sem que você precise se preocupar em decifrar editais complexos.
 
-O **Passaporte de Elegibilidade** elimina a necessidade de o estudante decifrar editais. A Cloudinha entrevista, valida e preenche os dados. O parceiro recebe não apenas um "lead", mas uma **candidatura estruturada** e validada.
+Abaixo explico todas as etapas pelas quais vamos passar juntos!
 
-1) Ler o estado atual dos dados do usuário usando getStudentProfile, para saber com quem está falando,  se onboarding_completed = TRUE e  qual sua passport_phase
-2) A cada mensagem enviada a Cloudinha deve estar orientada a informar sobre o passo atual que o estudante está no processo de aplicação ou usar ferramentas para tirar dúvidas e orientar o estudante no que for preciso, de acordo com o que o usuário estiver perguntando. Ela não deve falar sobre outros assuntos ou gerar respostas sobre outros assuntos
-3) Ela sempre poderá usar uma das ferramentas para responder dúvidas, mas deve focar em orientar e direcionar o usuario a seguir o fluxo e responder o formulário (que está acontecendo no Painel de Conteúdo ao lado). As ferramentas que ela pode usar são 
+---
 
-smartResearch.py
- (identificando se a dúvida/target_program é sobre o passaporte, o prouni, o sisu, a cloudinha, ou programas de apoio educacional) e 
+## 🚀 Como funciona o Fluxo do Passaporte?
 
-getImportantDates.py
-s (sobre/program type = prouni, sisu, general, partners -  programas educacionais parceiros)
-4) Na primeira mensagem enviada, todos os usuários terão passaport_phase = INTRO
- 5) Enquanto estiver com esse estado, a Cloudinha (passei_workflow) deve explicar que "Estou aqui para te ajudar a encontrar oportunidades educacionais que combinem com o seu momento e seus objetivos.
-Você pode conhecer e se candidatar a programas de apoio educacional. Esses programas ajudam estudantes a desenvolver seu potencial ao longo da trajetória escolar. Eles podem oferecer aulas complementares, mentoria, orientação de estudos, desenvolvimento pessoal e, em alguns casos, apoio financeiro.
-Estou aqui para responder qualquer dúvida que você tiver sobre programas educacionais e sobre o processo de aplicar na plataforma. Para começar, preciso entender um pouco sobre você.  Comece preenchendo o Onboarding ao lado. Com esses dados vamos te indicar em quais programas parceiros que você pode se aplicar"
-6) No frontend (
+O Passaporte é dividido em fases curtas e bem definidas. Aqui está o passo a passo de como vamos navegar:
 
-nubo-hub-app
-), enquanto houver essa passport_phase, ficamos sem componente de UI (avatar da Cloudinha de placeholder) e com o 
+### 1. Boas-Vindas (Fase INTRO) 👋
+Logo que você entra na plataforma, o nosso bate-papo começa travadinho enquanto eu me apresento e explico como os programas de apoio educacional funcionam (oferecendo mentoria, desenvolvimento, bolsas, etc). 
+*   **Ação:** Apenas aguarde alguns segundos. Eu logo libero o chat e a tela lateral para você preencher.
 
-ChatInput.tsx
- bloqueado. 
-7) 5 segundos depois do usuário entrar na tela deve mudar a phase para ONBOARDING, destravar o ChatInput e renderizar o componente de UI 
+### 2. O seu Cadastro (Fase ONBOARDING) 📝
+É aqui que a mágica começa a ganhar forma.
+*   **O que acontece:** Na lateral da tela, um formulário com seus dados aparecerá. Precisarei do seu nome, idade, cidade e nível de escolaridade.
+*   **Como eu ajudo:** Enquanto você preenche na tela, o chat fica liberado. Se pintar qualquer dúvida sobre *o que preencher* ou *por que* preciso dessa informação, é só perguntar! Eu tenho acesso em tempo real ao que você está fazendo.
+*   **Dica:** Preencha tudo direitinho, a qualidade do "match" depende da exatidão destes dados iniciais!
 
-UserDataSection.tsx
-, com o user_profile do usuário logado. Caso não tenha user_profile, deve haver um POST
-8) Quando o usuario terminar de preencher irá mudar a passport_phase para ASK_DEPENDENT
-9) Ao mudar essa phase ficamos sem componente de UI (avatar da Cloudinha de placeholder)
-10) Nessa etapa a Cloudinha deverá perguntar se a pessoa está buscando uma oportunidade para ela própria ou outra pessoa (lembre-se que o 
+### 3. Para Quem é a Aplicação? (Fase ASK_DEPENDENT) 👨‍👩‍👧
+A oportunidade é para você ou para alguém da sua família?
+*   **O que acontece:** Se você for menor de 18 anos, eu assumo imediatamente que a aplicação é **para você** e seguimos em frente. Mas, se você for maior de idade, aparecerão **dois botões na tela**: `[ Para Mim ]` e `[ Para Outra Pessoa ]`.
+*   **Ação:** Clique no botão correspondente. Se você escolher `Outra Pessoa`, vamos para um rápido cadastro do seu dependente (onde pergunto nome, idade e grau de parentesco).
+*   _Nota: O campo de texto do chat fica bloqueado nessa hora para evitar confusões. É só clicar no botão!_
 
-getStudentProfile.py
- está sendo chamado antes de toda pergunta, então ela sabe a idade da pessoa) e usar a 
+### 4. O Match Perfeito (Fase PROGRAM_MATCH) 🎯
+Hora dos resultados! 
+*   **O que acontece:** Eu verifico no banco de dados todas as regras de dezenas de parceiros (como *Instituto Ponte*, *Fundação Estudar*, etc) e cruzo com a sua idade, escolaridade e cidade.
+*   **Como eu ajudo:** Eu te apresento na conversa **quais programas você tem chance de entrar**. Vou te instigar a saber mais sobre eles.
+*   **Ação:** Você me diz pelo chat qual programa curtiu mais. Ex: *"Quero tentar o Instituto Ponte!"*. Eu confirmo com você e preparo a papelada invisível.
 
-processDependentChoice.py
-.
-11) Se is_dependent = FALSE  chama evaluatePassportEligibilityTool e atualiza para phase EVALUATE
-12) Se is_dependent = TRUE cria 1 o novo user_profiles e atualiza para phase DEPENDENT_ONBOARDING
-13) Nessa phase deve aparecer o DependentDataSection, que deve ser uma cópia do UserDataSection mas com 1 campo de Grau de parentesco e o nome dos campos atualizados
-14) Quando finalizar esse formulário e salvar chama evaluatePassportEligibilityTool com os dados do dependente e atualiza phase para PROGRAM_MATCH
-15) Na phase PROGRAM_MATCH também fica a imagem placeholder e input travado. A Tool anterior deve fornecer informação de quantos critérios de eligibilidade o usuário ou seu dependente já se adequam em relação a  cada partner (programa parceiro)
-16) Nela o agente deve instigar o estudante a saber mais sobre os programas, principalmente o que ele se adequa mais e se aplicar usando o Passaporte da Eligibilidade. Pela conversa ele identificar qual programa o estudante quer seguir e chamar uma startStudentApplicationTool, fazendo POST student_application com partner_id = do partner que ele escolher e já pré-preenchendo a student_application com as informações que temos em user_preferences e user_profiles, usando a partner_forms.mapping_source
-17) A cloudinha deve confirmar com o usuário antes de usar essa Tool e depois de usar deve alterar a phase para EVALUATE
-18) Na phase EVALUATE vamos precisar de um novo componente de UI renderizando o partner_forms correspondente, seguindo a ordem dos partner_steps (verifique 
+### 5. Formulário do Parceiro (Fase EVALUATE) 📋
+Nesta etapa, você já está oficialmente se inscrevendo em um programa parceiro.
+*   **O que acontece:** O painel lateral vai exibir o formulário oficial e detalhado da instituição que você escolheu. Mas o melhor de tudo: **várias respostas já estarão pré-preenchidas** usando os dados que você me deu antes!
+*   **Como eu ajudo:** Editais são chatos, mas eu os li inteiros por você! Pergunte no chat se não entender algum critério do formulário do parceiro e eu busco a resposta direto no regulamento oficial deles.
 
-PartnerForm.tsx
-e 
+### 6. Inscrição Concluída! (Fase CONCLUDED) 🎉
+Tudo pronto e enviado!
+*   **O que acontece:** Sua aplicação vai para o banco de dados da instituição e eu comemoro com você.
+*   **Como eu continuo ajudando:** Você ainda pode conversar comigo para perguntar sobre datas ("Quando sai o resultado?"), prazos ou qualquer outra dúvida educacional geral. Nessa fase eu atuo apenas como um guia de leitura, sem alterar mais nada no seu perfil.
 
-PartnerFormsManager.tsx
-para entender coimo os partnerforms sao construidos)
-19) Nessa fase a Cloudinha deve estar orientada a tirar dúvidas sobre os editais e processo daquele partner específico usando a 
+---
 
-smartResearch.py
-e a incentivar a finalizar o formulário
-20) Quando finalizar e clicar em Concluir, deve ser alterado o status da student_appliaction e salvar as informações de user_preferences e user_profiles a partir da mapping_source
-21) Deve trocar a PHASE para CONCLUDED e mostrar novamente o placeholder da Cloudinha
-22) Nessa fase o agente pode continuar tirando duvidas usando as ferramentas de busca, mas não usará outras ferramentas que interagem com o banco de dados
+## 🗣️ Dicas para a conversa perfeita:
+
+1.  **Não precisa sair da tela**: Se o formulário está na lateral, digite os dados diretamente nele. O chat serve para você **tirar dúvidas comigo** sobre o formulário!
+2.  **Seja natural**: Pode me perguntar coisas como *"A Fundação Estudar aceita quem faz EAD?"* ou *"Como comprovo minha renda no Insitituto Sol?"* nas etapas de match e avaliação.
+3.  **Use os botões quando surgirem**: Em momentos-chave, vou travar o texto e pedir sua confirmação por botões na tela para agilizar.
+4.  **Errou? Fique em paz!**: Se durante o papo você perceber que digitou algo errado antes, ou quer voltar pro seu cadastro, me avise! Posso voltar algumas fases atrás para você arrumar o que precisa.
+
+---
+
+## 🛡️ Segurança 
+
+Assim como no Sisu e Prouni, as suas informações do **Passaporte de Elegibilidade** são estritamente usadas para verificação junto aos parceiros do Nubo Hub. 
+
+Tudo pronto para conquistarmos esse próximo passo? Bora preencher o painel ao lado! 🚀✨

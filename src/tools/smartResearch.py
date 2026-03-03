@@ -23,7 +23,7 @@ PARTNER_GENERAL_KNOWLEDGE_PATH = os.path.join(
 VERIFICATION_MODEL = MODEL_CHAT 
 
 @safe_execution(error_type="tool_error", default_return="Erro na pesquisa inteligente.")
-async def smartResearchTool(query: str, target_program: str = None, partner_name: str = None, collection_name: str = "documents") -> str:
+async def smartResearchTool(query: str, program: str = None, partner_name: str = None, collection_name: str = "documents") -> str:
     """
     Realiza uma pesquisa inteligente sobre programas educacionais.
     
@@ -35,13 +35,14 @@ async def smartResearchTool(query: str, target_program: str = None, partner_name
     
     Args:
         query (str): A pergunta ou dúvida do usuário.
-        target_program (str, optional): O programa alvo para buscar informações. Valores possíveis:
+        program (str, optional): O programa alvo para buscar informações. Valores permitidos EXATOS:
             - 'passport': Dúvidas gerais sobre o fluxo do passaporte, como funciona a plataforma.
             - 'programs': Dúvidas sobre programas educacionais em geral ou sobre um parceiro específico (requer partner_name).
             - 'prouni': Dúvidas sobre o Prouni.
             - 'sisu': Dúvidas sobre o Sisu.
             - 'cloudinha': Dúvidas sobre a Cloudinha.
-        partner_name (str, optional): Nome do parceiro quando target_program='programs'.
+        partner_name (str, optional): Nome do parceiro quando program='programs'.
+            Ex: 'Fundação Estudar', 'Instituto Ponte', 'Programa Aurora', 'Instituto Sol'.
             Ex: 'Fundação Estudar', 'Instituto Ponte', 'Programa Aurora'.
         collection_name (str): Nome da coleção RAG (em standby). Padrão: 'documents'.
     
@@ -51,17 +52,17 @@ async def smartResearchTool(query: str, target_program: str = None, partner_name
     
     query_lower = query.lower()
     
-    # 1. Determine target_program (explicit or heuristic)
-    if not target_program:
-        target_program = _detect_target_program(query_lower)
+    # 1. Determine program (explicit or heuristic)
+    if not program:
+        program = _detect_target_program(query_lower)
     else:
-        target_program = target_program.lower().strip()
+        program = program.lower().strip()
     
-    if target_program:
-        print(f"[SmartResearch] target_program='{target_program}'. partner_name='{partner_name}'")
+    if program:
+        print(f"[SmartResearch] program='{program}'. partner_name='{partner_name}'")
     
     # 2. Handle 'passport' — workflow documentation (passei_workflow_doc.md)
-    if target_program == "passport":
+    if program == "passport":
         content = _read_file_content(PASSPORT_KNOWLEDGE_PATH)
         if content:
             return f"FONTE: DOCUMENTAÇÃO DO PASSAPORTE - FULL CONTEXT\n\n{content}"
@@ -69,7 +70,7 @@ async def smartResearchTool(query: str, target_program: str = None, partner_name
             print("[SmartResearch] Falha ao ler passei_workflow_doc.md. Fallback web.")
     
     # 3. Handle 'programs' — general knowledge + specific partner PDF
-    if target_program == "programs":
+    if program == "programs":
         # Always inject general partner knowledge base
         general_content = _read_file_content(PARTNER_GENERAL_KNOWLEDGE_PATH)
         general_section = ""
@@ -96,13 +97,13 @@ async def smartResearchTool(query: str, target_program: str = None, partner_name
             print("[SmartResearch] Nenhum conteúdo encontrado para programs.")
     
     # 4. Handle prouni/sisu/cloudinha — existing behavior via readRulesTool
-    if target_program in ("prouni", "sisu", "cloudinha"):
-        print(f"[SmartResearch] Detectado programa '{target_program}'. Usando Full Context Rules.")
+    if program in ("prouni", "sisu", "cloudinha"):
+        print(f"[SmartResearch] Detectado programa '{program}'. Usando Full Context Rules.")
         
-        rules_content = readRulesTool(program=target_program)
+        rules_content = readRulesTool(program=program)
         
         if "Erro" not in rules_content and "Nenhum conteúdo" not in rules_content:
-            return f"FONTE: DOCUMENTAÇÃO OFICIAL ({target_program.upper()}) - FULL CONTEXT\n\n{rules_content}"
+            return f"FONTE: DOCUMENTAÇÃO OFICIAL ({program.upper()}) - FULL CONTEXT\n\n{rules_content}"
         else:
             print(f"[SmartResearch] readRulesTool falhou ou não retornou dados: {rules_content}")
 
