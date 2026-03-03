@@ -195,6 +195,9 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
             profile_updates["state"] = raw_state
             print(f"!!! [STATE NOT FOUND] Keeping original: '{raw_state}'")
 
+    if "relationship" in updates:
+        profile_updates["relationship"] = updates["relationship"]
+
     if profile_updates:
         data = profile_updates.copy()
         data["id"] = user_id

@@ -32,6 +32,7 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
             # These will be filled during DEPENDENT_ONBOARDING:
             "full_name": None,
             "age": None,
+            "relationship": None,
             "city": None,
             "education": None,
             "onboarding_completed": False,
@@ -56,14 +57,20 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
             "message": f"Perfil do dependente criado. ID: {dependent_id}"
         }
     else:
-        # Self application — just transition to EVALUATE
+        # Self application — transition to EVALUATE instead of PROGRAM_MATCH and process eligibility
+        from src.tools.evaluatePassportEligibility import evaluatePassportEligibilityTool
+        
         updateStudentProfileTool(user_id=user_id, updates={
             "passport_phase": "EVALUATE",
         })
+        
+        # We can trigger evaluate right here, or let the agent handle it. The instruction says agent will do it if we are in PROGRAM_MATCH, but we are skipping it. Let's call it just in case, although the phase is EVALUATE now.
+        eval_result = evaluatePassportEligibilityTool(user_id=user_id)
         
         return {
             "status": "success",
             "isdependent": False,
             "next_phase": "EVALUATE",
-            "message": "Aplicação será para si próprio."
+            "message": "Aplicação será para si próprio. Avançando para análise de elegibilidade (EVALUATE).",
+            "eligibility_result": eval_result
         }

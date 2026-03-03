@@ -1,6 +1,7 @@
 from typing import AsyncGenerator, Any, Dict, Optional
 import asyncio
 import httpx
+import json
 from google.adk.runners import Runner
 from google.adk.agents import LlmAgent, Agent
 from google.genai.types import Content, Part
@@ -14,23 +15,93 @@ from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.updateStudentProfile import updateStudentProfileTool
 import logging
 
-# Workflows
+# Legacy Workflows (Removed from primary registry to enforce Passei Workflow)
+# "match_workflow": ...
+# "sisu_workflow": ...
+# "prouni_workflow": ...
 from src.agent.base_workflow import SingleAgentWorkflow
-from src.agent.onboarding_workflow import onboarding_workflow
-from src.agent.match_workflow import MatchWorkflow
 from src.agent.passport_workflow import PassportWorkflow
 
-# Initialize Registry
+# Initialize Registry with only the new enforced flow
 workflow_registry = {
-    "match_workflow": MatchWorkflow(),
-    "sisu_workflow": SingleAgentWorkflow(sisu_agent, "sisu_workflow"),
-    "prouni_workflow": SingleAgentWorkflow(prouni_agent, "prouni_workflow"),
-    "onboarding_workflow": onboarding_workflow,
     "passport_workflow": PassportWorkflow()
 }
 
-# Wrapper for Root (Default)
+# Wrapper for Root (Fallback only)
 root_workflow = SingleAgentWorkflow(root_agent, "root_workflow")
+
+# --- Knowledge Base Paths (injected into passei/concluded agents) ---
+import os
+_DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "documents")
+_PASSPORT_DOC_PATH = os.path.join(_DOCS_DIR, "passei_workflow_doc.md")
+_GENERAL_KNOWLEDGE_PATH = os.path.join(_DOCS_DIR, "partners", "Base de conhecimento geral.md")
+
+# Cache to avoid re-reading files on every turn
+_knowledge_cache = {}
+
+def _load_knowledge_context() -> str:
+    """Pre-loads knowledge base content and returns formatted context string.
+    
+    Note: passei_workflow_doc.md is a technical PRD not suitable for direct context injection
+    (it contains code references and the INTRO script which the LLM would repeat).
+    Instead, we inject a student-facing summary of the process + the general knowledge base.
+    """
+    if "content" in _knowledge_cache:
+        return _knowledge_cache["content"]
+    
+    print(f"[Workflow] Loading knowledge base files...")
+    
+    sections = []
+    
+    # 1. Student-facing process summary (replaces raw passei_workflow_doc.md injection)
+    process_summary = """=== COMO FUNCIONA O PASSAPORTE DA ELIGIBILIDADE ===
+
+O Passaporte da Eligibilidade é um processo guiado pela Cloudinha que ajuda estudantes a encontrar e se candidatar a programas educacionais parceiros. Funciona assim:
+
+ETAPA 1 - ONBOARDING (Cadastro de dados):
+O estudante preenche um formulário com seus dados básicos: nome, idade, cidade, escolaridade, CEP e endereço. Esses dados são essenciais para avaliar a elegibilidade nos programas parceiros.
+
+ETAPA 2 - ESCOLHA DO CANDIDATO:
+Após o cadastro, perguntamos se o estudante busca uma oportunidade para si próprio ou para outra pessoa (um dependente, como filho ou familiar).
+
+ETAPA 3 - ANÁLISE DE ELEGIBILIDADE (Program Match):
+Com base nos dados informados, o sistema analisa automaticamente quais programas parceiros o estudante atende aos critérios (como idade, renda, escolaridade). A Cloudinha apresenta os resultados.
+
+ETAPA 4 - APLICAÇÃO (Evaluate):
+O estudante escolhe um programa e preenche o formulário específico do parceiro. A Cloudinha tira dúvidas sobre o edital e os campos do formulário.
+
+ETAPA 5 - CONCLUSÃO:
+Após enviar a aplicação, o processo está completo. O estudante pode continuar tirando dúvidas.
+
+PARCEIROS DISPONÍVEIS:
+- Fundação Estudar: Programas de desenvolvimento e bolsas para estudantes de alto potencial.
+- Instituto Ponte: Apoio educacional focado em acesso a escolas de excelência.
+- Programa Aurora | Instituto Sol: Programa de formação complementar e mentoria.
+
+O QUE SÃO PROGRAMAS DE APOIO EDUCACIONAL:
+São iniciativas de organizações da sociedade civil que ampliam oportunidades de formação acadêmica. NÃO se limitam a bolsas financeiras — podem incluir aulas complementares, mentoria, orientação de carreira, desenvolvimento socioemocional, preparação para processos seletivos e mais.
+"""
+    sections.append(process_summary)
+    print("[Workflow] ✅ Process summary loaded")
+    
+    # 2. General partner knowledge base (detailed content)
+    if os.path.exists(_GENERAL_KNOWLEDGE_PATH):
+        try:
+            with open(_GENERAL_KNOWLEDGE_PATH, "r", encoding="utf-8") as f:
+                content = f.read()
+            if content.strip():
+                sections.append(f"=== BASE DE CONHECIMENTO DETALHADA SOBRE PROGRAMAS EDUCACIONAIS ===\n{content}")
+                print(f"[Workflow] ✅ Loaded Base de conhecimento geral.md ({len(content)} chars)")
+        except Exception as e:
+            print(f"[Workflow] ❌ Erro ao ler {_GENERAL_KNOWLEDGE_PATH}: {e}")
+    else:
+        print(f"[Workflow] ❌ Base de conhecimento geral.md NOT FOUND at {_GENERAL_KNOWLEDGE_PATH}")
+    
+    result = "\nBASE DE CONHECIMENTO — USE ESTAS INFORMAÇÕES PARA RESPONDER PERGUNTAS DO ESTUDANTE:\n" + "\n\n".join(sections) + "\n--- FIM DA BASE DE CONHECIMENTO ---\n"
+    print(f"[Workflow] ✅ Knowledge context ready ({len(result)} chars total)")
+    
+    _knowledge_cache["content"] = result
+    return result
 
 class SimpleTextEvent:
     def __init__(self, text: str):
@@ -42,7 +113,8 @@ def check_authentication(user_id: str) -> bool:
 async def run_workflow(
     user_id: str,
     session_id: str,
-    new_message: Content
+    new_message: Content,
+    ui_form_state: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[Any, None]:
     """
     Orchestrates the generic agent workflow.
@@ -102,42 +174,15 @@ async def run_workflow(
     except Exception as e:
         print(f"[RunWorkflow] Context Fetch Error: {e}")
 
-    # Migrate legacy workflows to passport_workflow
-    # Users who had match_workflow/sisu_workflow/prouni_workflow as active should go through passport_workflow now
-    LEGACY_WORKFLOWS = {"match_workflow", "sisu_workflow", "prouni_workflow", "onboarding_workflow"}
-    active_wf = profile_state.get("active_workflow")
-    if active_wf in LEGACY_WORKFLOWS:
-        print(f"[RunWorkflow] Migrating legacy workflow '{active_wf}' -> 'passport_workflow'")
+    # O "Passei Workflow" é o fluxo definitivo e único da Cloudinha agora.
+    # Independentemente do que estava no active_wf, vamos forçar para passport_workflow
+    if active_wf != "passport_workflow":
+        print(f"[RunWorkflow] Forcing workflow -> 'passport_workflow'")
         updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "passport_workflow"})
         profile_state = getStudentProfileTool(user_id)
         active_wf = "passport_workflow"
-
-    # Only run router if user already has an active workflow (to decide CONTINUE vs CHANGE)
-    # For brand new users, we default to passport_workflow below
-    if active_wf:
-        decision = await execute_router_agent(user_id, session_id, msg_text, profile_state, recent_history=recent_history_str)
-        
-        if decision:
-             intent = decision.get("intent")
-             target = decision.get("target_workflow")
-             
-             if intent == "CHANGE_WORKFLOW" and target:
-                 yield {"type": "tool_start", "tool": "RouterAgent", "args": {"action": "switch", "target": target}}
-                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": target})
-                 profile_state = getStudentProfileTool(user_id) # Refresh
-                 yield {"type": "tool_end", "tool": "RouterAgent", "output": f"Sent to {target}"}
-                 
-             elif intent == "EXIT_WORKFLOW":
-                 yield {"type": "tool_start", "tool": "RouterAgent", "args": {"action": "exit"}}
-                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
-                 profile_state = getStudentProfileTool(user_id) # Refresh
-                 yield {"type": "tool_end", "tool": "RouterAgent", "output": "Exited workflow"}
-    else:
-        # No active workflow — default to passport_workflow
-        updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "passport_workflow"})
-        profile_state = getStudentProfileTool(user_id)
-        # Ensure it's set in the local dict just in case cache delayed the read
-        profile_state["active_workflow"] = "passport_workflow"
+    
+    profile_state["active_workflow"] = "passport_workflow"
 
     # Main Loop
     MAX_STEPS = 10
@@ -146,18 +191,11 @@ async def run_workflow(
 
     while steps_run < MAX_STEPS:
         
-        # 1. Determine Active Workflow
-        active_workflow_name = profile_state.get("active_workflow")
-        workflow_obj = None
-
-        # passport_workflow is the default entry point for everything
-        # It handles onboarding internally
-        if active_workflow_name in workflow_registry:
-            workflow_obj = workflow_registry[active_workflow_name]
-        else:
-            workflow_obj = root_workflow # Fallback
+        # 1. Determine Active Workflow (Always passport_workflow now)
+        workflow_obj = workflow_registry["passport_workflow"]
 
         # 2. Get Agent or Scripted Message from Workflow
+        # By passing profile_state, passport_workflow looks at 'passport_phase'
         step = workflow_obj.get_agent_for_user(user_id, profile_state)
         
         # Handle None — workflow is done
@@ -233,14 +271,25 @@ async def run_workflow(
             if v is not None and str(v).strip() != "":
                 profile_context_str += f"- {k}: {v}\n"
         profile_context_str += "\n"
+
+        if ui_form_state is not None:
+            focused_field = ui_form_state.get("_focused_field", "Nenhum")
+            form_data = {k: v for k, v in ui_form_state.items() if not k.startswith("_")}
+            form_json = json.dumps(form_data, ensure_ascii=False)
+            profile_context_str += f"\nESTADO ATUAL DO FORMULÁRIO DO USUÁRIO PENDENTE DE SALVAMENTO: {form_json}. CAMPO EM FOCO: {focused_field}\n"
+        
+        # Pre-load knowledge base content for passei/concluded agents
+        knowledge_context_str = ""
+        if agent.name in ("passei_agent", "concluded_agent"):
+            knowledge_context_str = _load_knowledge_context()
         
         # Create Runner Instance (Clone agent with new instruction)
-        # Inject: USER_ID_CONTEXT + profile_state + chat history + original instruction + RAG examples
+        # Inject: USER_ID_CONTEXT + original instruction + profile_state + chat history + knowledge base + RAG examples
         runnable_agent = LlmAgent(
             model=agent.model,
             name=agent.name,
             description=agent.description,
-            instruction=f"USER_ID_CONTEXT: {user_id}\n" + profile_context_str + chat_history_for_agent + agent.instruction + "\n" + examples,
+            instruction=f"USER_ID_CONTEXT: {user_id}\n\n" + agent.instruction + "\n\n" + profile_context_str + chat_history_for_agent + knowledge_context_str + "\n" + examples,
             tools=agent.tools,
             output_key=agent.output_key
         )
