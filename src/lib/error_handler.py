@@ -66,10 +66,9 @@ def _handle_error(e, func_name, error_type, default_return, re_raise):
         # Log to Supabase 'agent_errors' table
         error_data = {
             "error_type": error_type,
-            "function_name": func_name,
             "error_message": error_msg,
-            "traceback": tb,
-            "timestamp": datetime.datetime.now().isoformat()
+            "stack_trace": tb,
+            "metadata": {"function_name": func_name}
         }
         # Fire and forget (or await if async, but this is sync for now)
         # Note: synchronous tools might block on this.
