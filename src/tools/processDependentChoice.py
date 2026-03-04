@@ -11,6 +11,10 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
     If dependent: creates a NEW user_profiles row for the dependent with isdependent=TRUE.
     If self: just transitions to EVALUATE.
     
+    IMPORTANT: This tool should ONLY be called when the user explicitly expresses their choice 
+    (e.g., "it's for me", "it's for my son"). Do NOT call this tool automatically based on 
+    profile completion or age if a choice hasn't been clearly communicated by the user.
+    
     Args:
         user_id (str): The ID of the currently logged-in user (the responsible/parent).
         choice (str): "self" or "dependent".
@@ -22,30 +26,41 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
     is_dependent = choice == "dependent"
     
     if is_dependent:
-        # Create a NEW user_profiles row for the dependent
-        dependent_id = str(uuid.uuid4())
+        # Check if parent already has a dependent assigned
+        parent_res = supabase.table("user_profiles").select("current_dependent_id").eq("id", user_id).single().execute()
+        existing_dependent_id = parent_res.data.get("current_dependent_id") if parent_res.data else None
         
-        dependent_data = {
-            "id": dependent_id,
-            "isdependent": True,
-            "parent_user_id": user_id,
-            # These will be filled during DEPENDENT_ONBOARDING:
-            "full_name": None,
-            "age": None,
-            "relationship": None,
-            "city": None,
-            "education": None,
-            "onboarding_completed": False,
-            "active_workflow": "passport_workflow",
-            "passport_phase": "DEPENDENT_ONBOARDING",
-        }
+        if existing_dependent_id:
+            dependent_id = existing_dependent_id
+            print(f"!!! [DEPENDENT REUSED] id={dependent_id}, parent={user_id}")
+            # Ensure phase is updated even if reusing
+            updateStudentProfileTool(user_id=dependent_id, updates={"passport_phase": "DEPENDENT_ONBOARDING"})
+        else:
+            # Create a NEW user_profiles row for the dependent
+            dependent_id = str(uuid.uuid4())
+            
+            dependent_data = {
+                "id": dependent_id,
+                "isdependent": True,
+                "parent_user_id": user_id,
+                # These will be filled during DEPENDENT_ONBOARDING:
+                "full_name": None,
+                "age": None,
+                "relationship": None,
+                "city": None,
+                "education": None,
+                "onboarding_completed": False,
+                "active_workflow": "passport_workflow",
+                "passport_phase": "DEPENDENT_ONBOARDING",
+            }
+            
+            supabase.table("user_profiles").insert(dependent_data).execute()
+            print(f"!!! [DEPENDENT CREATED] id={dependent_id}, parent={user_id}")
         
-        supabase.table("user_profiles").insert(dependent_data).execute()
-        print(f"!!! [DEPENDENT CREATED] id={dependent_id}, parent={user_id}")
-        
-        # Save the dependent_id on the parent's profile so the flow knows which dependent to use
+        # Save the dependent_id on the parent's profile and set it as active target
         updateStudentProfileTool(user_id=user_id, updates={
             "current_dependent_id": dependent_id,
+            "active_application_target_id": dependent_id,
             "passport_phase": "DEPENDENT_ONBOARDING",
         })
         
@@ -57,20 +72,15 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
             "message": f"Perfil do dependente criado. ID: {dependent_id}"
         }
     else:
-        # Self application — transition to EVALUATE instead of PROGRAM_MATCH and process eligibility
-        from src.tools.evaluatePassportEligibility import evaluatePassportEligibilityTool
-        
+        # Self application — transition to PROGRAM_MATCH and set target
         updateStudentProfileTool(user_id=user_id, updates={
-            "passport_phase": "EVALUATE",
+            "active_application_target_id": user_id,
+            "passport_phase": "PROGRAM_MATCH",
         })
-        
-        # We can trigger evaluate right here, or let the agent handle it. The instruction says agent will do it if we are in PROGRAM_MATCH, but we are skipping it. Let's call it just in case, although the phase is EVALUATE now.
-        eval_result = evaluatePassportEligibilityTool(user_id=user_id)
         
         return {
             "status": "success",
             "isdependent": False,
-            "next_phase": "EVALUATE",
-            "message": "Aplicação será para si próprio. Avançando para análise de elegibilidade (EVALUATE).",
-            "eligibility_result": eval_result
+            "next_phase": "PROGRAM_MATCH",
+            "message": "Aplicação será para si próprio. Avançando para análise de elegibilidade (PROGRAM_MATCH)."
         }

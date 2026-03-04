@@ -18,12 +18,12 @@ import datetime
 import traceback
 from src.lib.supabase import supabase
 
-def _log_tool_error(user_id: str, session_id: str, tool_name: str, error_msg: str, tb: str, args=None, raw_output=None):
+def _log_tool_error(user_id: str, session_id: str, tool_name: str, error_msg: str, tb: str = None, args=None, raw_output=None, error_type: str = "tool_error"):
     try:
         error_data = {
             "user_id": user_id,
             "session_id": session_id,
-            "error_type": "tool_error",
+            "error_type": error_type,
             "error_message": error_msg,
             "stack_trace": tb,
             "metadata": {
@@ -33,8 +33,24 @@ def _log_tool_error(user_id: str, session_id: str, tool_name: str, error_msg: st
             }
         }
         supabase.table("agent_errors").insert(error_data).execute()
+        print(f"[Workflow] Logged {error_type} for {tool_name}: {error_msg}")
     except Exception as e:
         print(f"[Workflow] Error logging tool error to DB: {e}")
+
+def _is_empty_tool_result(resp_dict: dict) -> bool:
+    """Check if a tool response is functionally empty (no useful data returned)."""
+    if not resp_dict:
+        return True
+    result = resp_dict.get("result")
+    if result is None:
+        return True
+    if isinstance(result, (list, dict, str)) and len(result) == 0:
+        return True
+    # Also check top-level data key (some tools return {"data": [...]})
+    data = resp_dict.get("data")
+    if data is not None and isinstance(data, (list, dict, str)) and len(data) == 0:
+        return True
+    return False
 
 # Legacy Workflows (Removed from primary registry to enforce Passei Workflow)
 from src.agent.base_workflow import SingleAgentWorkflow
@@ -179,6 +195,7 @@ async def _run_reasoning_agent(
     runner = Runner(agent=runnable, app_name="reasoning_pipeline", session_service=transient_session)
     
     captured = ""
+    last_tool_args = {}  # Track args from tool_start to pair with tool_end
     async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=message):
         if hasattr(event, 'text') and event.text:
             captured += event.text
@@ -189,6 +206,7 @@ async def _run_reasoning_agent(
                 elif hasattr(p, 'function_call') and p.function_call is not None:
                     tool_name = p.function_call.name
                     args = dict(p.function_call.args) if hasattr(p.function_call, 'args') else {}
+                    last_tool_args[tool_name] = args
                     yield {"type": "tool_start", "tool": tool_name, "args": args}
                 elif hasattr(p, 'function_response') and p.function_response is not None:
                     tool_name = p.function_response.name
@@ -200,16 +218,29 @@ async def _run_reasoning_agent(
                     # Yield tool end
                     yield {"type": "tool_end", "tool": tool_name, "output": json.dumps(resp_dict, ensure_ascii=False)}
                     
-                    # Check for errors in tool response
+                    tool_args = last_tool_args.pop(tool_name, None)
+                    
+                    # Check for explicit failure flag
                     if resp_dict.get("success") is False:
                         _log_tool_error(
                             user_id=user_id,
                             session_id=session_id,
                             tool_name=tool_name,
                             error_msg=str(resp_dict.get("error", "Unknown tool error")),
-                            tb=None,
-                            args=None,
-                            raw_output=str(resp_dict)
+                            args=tool_args,
+                            raw_output=str(resp_dict),
+                            error_type="tool_error"
+                        )
+                    # Check for empty result (functionally an error — tool returned no useful data)
+                    elif _is_empty_tool_result(resp_dict):
+                        _log_tool_error(
+                            user_id=user_id,
+                            session_id=session_id,
+                            tool_name=tool_name,
+                            error_msg=f"Tool '{tool_name}' returned empty result",
+                            args=tool_args,
+                            raw_output=str(resp_dict),
+                            error_type="tool_empty_result"
                         )
                         
     # Yield the final accumulated reasoning text
@@ -429,11 +460,22 @@ async def run_workflow(
                             elif r_event.get("type") == "final_text":
                                 reasoning_raw = r_event.get("text", "")
                     break
-                except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError, ConnectionError, TimeoutError, OSError) as e:
+                except Exception as e:
+                    import traceback
                     print(f"[RunWorkflow] Reasoning attempt {attempt+1}/{max_retries} failed: {e}")
+                    
+                    _log_tool_error(
+                        user_id=user_id,
+                        session_id=session_id,
+                        tool_name="reasoning_agent",
+                        error_msg=str(e),
+                        tb=traceback.format_exc(),
+                        error_type="reasoning_agent_error"
+                    )
+                    
                     if attempt == max_retries - 1:
-                        yield {"type": "error", "message": "Estou com dificuldades de conexão. Tente novamente."}
-                        yield {"type": "tool_end", "tool": "reasoning_agent", "output": "Failed"}
+                        yield {"type": "error", "message": "Estou com dificuldades de conexão ou limite de uso excedido. Tente novamente em alguns minutos."}
+                        yield {"type": "tool_end", "tool": "reasoning_agent", "output": "Failed", "success": False}
                         return
                     await asyncio.sleep(2 ** attempt)
             
@@ -477,10 +519,21 @@ async def run_workflow(
                                     if hasattr(p, 'text') and p.text:
                                         captured_output += p.text
                     break
-                except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError, ConnectionError, TimeoutError, OSError) as e:
+                except Exception as e:
+                    import traceback
                     print(f"[RunWorkflow] Response attempt {attempt+1}/{max_retries} failed: {e}")
+                    
+                    _log_tool_error(
+                        user_id=user_id,
+                        session_id=session_id,
+                        tool_name="response_agent",
+                        error_msg=str(e),
+                        tb=traceback.format_exc(),
+                        error_type="response_agent_error"
+                    )
+                    
                     if attempt == max_retries - 1:
-                        yield {"type": "error", "message": "Estou com dificuldades de conexão. Tente novamente."}
+                        yield {"type": "error", "message": "Estou com dificuldades de conexão ou limite de uso excedido. Tente novamente em alguns minutos."}
                         break
                     await asyncio.sleep(2 ** attempt)
                     captured_output = ""

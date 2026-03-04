@@ -53,17 +53,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
     
     # print(f"!!! [DEBUG READ] getStudentProfileTool raw profile for {user_id}: {profile_data}")
 
-    # Fetch detailed scores history
-    scores_history = []
-    
-    scores_response = supabase.table("user_enem_scores") \
-        .select("year, nota_linguagens, nota_ciencias_humanas, nota_ciencias_natureza, nota_matematica, nota_redacao") \
-        .eq("user_id", user_id) \
-        .order("year", desc=True) \
-        .execute()
-    
-    if scores_response and hasattr(scores_response, 'data'):
-        scores_history = scores_response.data
+    # (ENEM Scores History fetch removed to avoid agent confusion and optimize query)
 
     # Fetch user preferences
     preferences_data = None
@@ -108,19 +98,9 @@ def getStudentProfileTool(user_id: str) -> Dict:
         "street_number": profile_data.get("street_number") if profile_data else None,
         "complement": profile_data.get("complement") if profile_data else None,
         "enem_score": preferences_data.get("enem_score") if preferences_data else None,
-        "enem_scores_history": scores_history,
         "per_capita_income": preferences_data.get("family_income_per_capita") if preferences_data else None,
-        "course_interest": preferences_data.get("course_interest") if preferences_data else None,
-        "location_preference": preferences_data.get("location_preference") if preferences_data else None,
-        "state_preference": preferences_data.get("state_preference") if preferences_data else None,
         "quota_types": preferences_data.get("quota_types", []) if preferences_data else [],
-        "preferred_shifts": preferences_data.get("preferred_shifts", []) if preferences_data else [],
-        "university_preference": preferences_data.get("university_preference") if preferences_data else None,
-        "program_preference": preferences_data.get("program_preference") if preferences_data else None,
-        "device_latitude": preferences_data.get("device_latitude") if preferences_data else None,
-        "device_longitude": preferences_data.get("device_longitude") if preferences_data else None,
-        "workflow_data": preferences_data.get("workflow_data") if preferences_data else {},
-        "registration_step": preferences_data.get("registration_step") if preferences_data else None
+        "eligibility_results": profile_data.get("eligibility_results", []) if profile_data else []
     }
 
     # Save to cache (Disabled)

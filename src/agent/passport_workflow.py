@@ -12,46 +12,6 @@ PASSPORT_INTRO_MESSAGE = "Oi! Eu sou a Cloudinha 👋\n\nEstou aqui para te ajud
 
 from src.tools.processDependentChoice import processDependentChoiceTool
 from src.tools.lookupCEP import lookupCEPTool
-
-# Agent 2.5: Dependent Onboarding — collect dependent's info
-DEPENDENT_ONBOARDING_INSTRUCTION = """Você é a Cloudinha coletando dados de um DEPENDENTE.
-
-IMPORTANTE: O ID do dependente é fornecido como DEPENDENT_ID_CONTEXT no início desta instrução.
-Use ESSE ID (não o USER_ID_CONTEXT) como user_id ao chamar updateStudentProfileTool.
-
-CAMPOS NECESSÁRIOS (5 no total):
-1. Nome completo → updates: {{"full_name": "valor"}}
-2. Idade → updates: {{"age": valor_numerico}}
-3. Grau de parentesco → updates: {{"relationship": "valor"}}
-4. Cidade → updates: {{"city_name": "valor"}}
-5. Escolaridade → updates: {{"education": "valor"}}
-
-SEU FLUXO OBRIGATÓRIO A CADA TURNO:
-1. Chame getStudentProfileTool(user_id=DEPENDENT_ID_CONTEXT) para ver quais campos JÁ estão preenchidos.
-2. LEIA O HISTÓRICO DA CONVERSA. Se o usuário já forneceu alguma informação na MENSAGEM ATUAL ou em mensagens anteriores que ainda NÃO foi salva, SALVE IMEDIATAMENTE com updateStudentProfileTool.
-3. Pergunte APENAS o PRÓXIMO campo que ainda está vazio.
-4. Se todos os 5 campos estiverem preenchidos, diga: "Perfeito! Dados do dependente cadastrados com sucesso! ✅"
-
-EXEMPLOS:
-- Se o histórico mostra que o bot perguntou "Qual o nome?" e o usuário respondeu "Maria Silva" → SALVE {{"full_name": "Maria Silva"}} e pergunte a idade.
-- Se o perfil já tem full_name e age preenchidos → pergunte o grau de parentesco.
-- Se tudo preenchido → confirme sucesso.
-
-REGRA CRÍTICA: SEMPRE chame a ferramenta updateStudentProfileTool ANTES de perguntar o próximo campo.
-Nunca re-pergunte algo que já foi respondido.
-"""
-
-def _create_dependent_onboarding_agent(dependent_id: str) -> LlmAgent:
-    """Creates a dynamic agent instance with the dependent_id injected."""
-    return LlmAgent(
-        model=MODEL_CHAT,
-        name="passport_dependent_onboarding_agent",
-        description="Collects the dependent's profile information.",
-        instruction=f"DEPENDENT_ID_CONTEXT: {dependent_id}\n" + DEPENDENT_ONBOARDING_INSTRUCTION,
-        tools=[updateStudentProfileTool, getStudentProfileTool, lookupCEPTool]
-    )
-
-from src.tools.evaluatePassportEligibility import evaluatePassportEligibilityTool
 from src.tools.getNextPartnerQuestion import getNextPartnerQuestionTool
 from src.tools.savePartnerAnswer import savePartnerAnswerTool
 from src.tools.smartResearch import smartResearchTool
@@ -59,125 +19,134 @@ from src.tools.getImportantDates import getImportantDatesTool
 from src.tools.startStudentApplication import startStudentApplicationTool
 from src.tools.rewindWorkflowStatus import rewindWorkflowStatusTool
 from src.tools.getPartnerForms import getPartnerFormsTool
-
+from src.tools.getStudentApplication import getStudentApplicationTool
+from src.tools.getEligibilityResults import getEligibilityResultsTool
 
 # ============================================================
-# REASONING AGENT — Intent classification + Tool selection/execution
+# REASONING AGENTS — Intent classification + Tool selection/execution by Phase
 # ============================================================
 
-REASONING_INSTRUCTION = """Você é o módulo de raciocínio da Cloudinha. Sua função é ANALISAR a mensagem do usuário, ENTENDER a intenção, e usar suas FERRAMENTAS para coletar dados relevantes.
-
-VOCÊ NÃO GERA A RESPOSTA FINAL PARA O USUÁRIO. Outro agente fará isso. Sua função é:
-1. Entender a intenção do usuário
-2. CHAMAR AS FERRAMENTAS necessárias para obter dados
-3. Depois de usar as ferramentas, fazer um RESUMO TÉCNICO do que encontrou
+ONBOARDING_REASONING_INSTRUCTION = """Você está na fase ONBOARDING. O usuário está preenchendo seus dados pessoais em um formulário na tela.
 
 O user_id está disponível como USER_ID_CONTEXT no início deste prompt.
 
-CONTEXTO DISPONÍVEL (injetado automaticamente):
-- PERFIL DO ESTUDANTE: dados como nome, idade, cidade, fase, etc.
-- FASE ATUAL (passport_phase): ONBOARDING, ASK_DEPENDENT, PROGRAM_MATCH, EVALUATE, etc.
-- HISTÓRICO DA CONVERSA: últimas mensagens para entender referências implícitas
-- ESTADO DO FORMULÁRIO: campos preenchidos e campo em foco (quando aplicável)
+Sua função tática é dupla:
+1. **RESPONDER DÚVIDAS E PESQUISAR (PRIORIDADE ALTA)**: O usuário PODE E VAI fazer perguntas sobre prazos, como funcionam os programas parceiros, o que ele ganha com eles, etc. Você DEVE SEMPRE usar as ferramentas `smartResearchTool` e `getImportantDatesTool` para responder a essas dúvidas com precisão. NUNCA se recuse a responder uma dúvida sob o pretexto de que ele precisa terminar o cadastro primeiro.
+2. **AUXILIAR NO CADASTRO**: Use `getStudentProfileTool` para ver o que ele já preencheu. Compare com o 'ESTADO ATUAL DO FORMULÁRIO DO USUÁRIO' injetado no contexto. Se ele relatar um erro ("não consigo salvar", "o que falta?"), aponte qual campo precisa ser corrigido com base no contexto injetado. Lembre-o gentilmente de que o preenchimento é feito na tela.
 
-REGRA CRÍTICA: SEMPRE CHAME PELO MENOS UMA FERRAMENTA. Nunca responda sem buscar dados.
-Se a pergunta é sobre programas → chame smartResearchTool
-Se é sobre datas → chame getImportantDatesTool
-Se é sobre um campo do formulário → chame getPartnerFormsTool
-Se é sobre elegibilidade → chame evaluatePassportEligibilityTool
-Se é uma ação do workflow → chame a tool correspondente (processDependentChoiceTool, etc.)
-Se não sabe qual usar → chame smartResearchTool com o tópico da pergunta
+Instruções finais: A resposta exata para dúvidas gerais do passaporte já consta no seu contexto injetado, mas para parceiros/prazos específicos, faça a chamada de tool obrigatória. Não tente realizar avaliações de eligibility ou achar matches definitivos ainda, mas sempre responda as dúvidas dele sobre as oportunidades da plataforma."""
 
-REGRAS DE USO DAS FERRAMENTAS:
+DEPENDENT_ONBOARDING_REASONING_INSTRUCTION = """Você está na fase DEPENDENT_ONBOARDING. O usuário está preenchendo os dados do seu dependente (ex: um filho) em um formulário na tela ao lado.
 
-1. smartResearchTool — Para buscar informações na base de conhecimento:
-   - Dúvida sobre programas educacionais em geral → program="programs"
-   - Dúvida sobre parceiro específico → program="programs", partner_name="Nome Completo"
-   - Dúvida sobre o fluxo/processo do passaporte → program="passport"
-   - Dúvida sobre Prouni → program="prouni"
-   - Dúvida sobre Sisu → program="sisu"
-   - Dúvida sobre a Cloudinha → program="cloudinha"
+O user_id do titular está como USER_ID_CONTEXT. O dependent_id do dependente está no contexto (verifique em current_dependent_id no perfil).
 
-2. evaluatePassportEligibilityTool — Para avaliar elegibilidade:
-   - Só use quando o usuário quiser saber quais programas se adequa
-   - Parâmetro: user_id=USER_ID_CONTEXT
+Sua função tática é dupla:
+1. **RESPONDER DÚVIDAS E PESQUISAR (PRIORIDADE ALTA)**: O pai/responsável PODE E VAI fazer perguntas sobre prazos, como funcionam os programas parceiros e o que eles oferecem para o filho dele. Você DEVE SEMPRE usar as ferramentas `smartResearchTool` e `getImportantDatesTool` para responder a essas dúvidas clara e precisamente. NUNCA se recuse a responder uma dúvida sob o pretexto de que ele precisa terminar o cadastro do dependente primeiro.
+2. **AUXILIAR NO CADASTRO DO DEPENDENTE**: Use `getStudentProfileTool(user_id=ID_DO_DEPENDENTE)` para ver o que já foi salvo no banco. Compare com o 'ESTADO ATUAL DO FORMULÁRIO DO USUÁRIO' injetado no contexto. Se houver dúvidas ou erros relatados na hora de preencher/salvar, oriente-o usando esses dados. O preenchimento deve ser feito na UI visual.
 
-3. getImportantDatesTool — Para prazos e datas:
-   - Dúvida sobre datas de parceiros → program_type="partners"
-   - Dúvida sobre datas do Prouni → program_type="prouni"
-   - Dúvida sobre datas do Sisu → program_type="sisu"
+Instruções finais: Não tente realizar avaliações de eligibility ou achar matches definitivos para o dependente ainda. Foco total em tirar as dúvidas abertamente e ajudar a preencher os dados corretamente."""
 
-4. getPartnerFormsTool — Para campos do formulário de um parceiro:
-   - Quando o usuário pergunta sobre um campo específico do formulário
-   - Parâmetro: partner_id (UUID do parceiro, extraído do contexto/perfil)
+ASK_DEPENDENT_REASONING_INSTRUCTION = """Você está na fase ASK_DEPENDENT. O sistema quer saber se essas oportunidades de estudo são para o próprio usuário ou para um dependente (filho, irmão, etc).
 
-5. getStudentProfileTool — Para consultar o perfil do estudante:
-   - Quando precisa de dados atualizados do perfil
+O user_id está disponível como USER_ID_CONTEXT no início deste prompt.
 
-6. processDependentChoiceTool — Para fase ASK_DEPENDENT:
-   - Quando o usuário responde se busca oportunidade para si ou para outra pessoa
-   - Parâmetro: user_id, choice ("self" ou "dependent")
+1. O usuário pode tirar dúvidas sobre programas a qualquer momento. Se ele perguntar algo, use `smartResearchTool` ou `getImportantDatesTool` para responder com clareza.
+2. Se o usuário afirmar para quem é a vaga de forma clara (ex: "é para mim" ou "para minha filha"), chame OBRIGATORIAMENTE a ferramenta `processDependentChoiceTool(choice='self')` ou `processDependentChoiceTool(choice='dependent')` para registrar a escolha e avançar o fluxo.
+3. Se ele não escolheu ainda, chame a `getStudentProfileTool` para ver a idade dele e, no seu resumo técnico, explique as opções com base na idade para que o Response Agent formule a mensagem.
+4. NÃO tente empurrar a decisão. Deixe os botões da UI ou a resposta do usuário guiarem."""
 
-7. startStudentApplicationTool — Para iniciar aplicação em um parceiro:
-   - Apenas na fase PROGRAM_MATCH, após confirmação do usuário
-   - Parâmetros: user_id, partner_id
+PROGRAM_MATCH_REASONING_INSTRUCTION = """Esta é a fase PROGRAM_MATCH, a hora da verdade! Os programas parceiros já estão sendo exibidos na tela do usuário em cards visuais. Siga esta ordem rigidamente:
 
-8. rewindWorkflowStatusTool — Válvula de escape:
-   - Quando o usuário quer recomeçar ou corrigir dados
+O user_id está disponível como USER_ID_CONTEXT no início deste prompt. O respectivo dependent_id está no perfil do usuário, caso ele tenha um.
 
-ATENÇÃO AOS PARÂMETROS (CRÍTICO):
-- partner_name SEMPRE com nome completo: "Fundação Estudar" (NÃO "Estudar"), "Instituto Ponte" (NÃO "Ponte"), "Programa Aurora" (NÃO "Aurora")
-- program: valores exatos são "passport", "programs", "prouni", "sisu", "cloudinha"
-- user_id: usar o USER_ID_CONTEXT fornecido no início do prompt
+1. **Leitura dos Dados:** Use `getEligibilityResultsTool` para buscar os resultados de elegibilidade do estudante. Se a ferramenta retornar resultados, anote os `partner_id` (UUID) e `partner_name` de cada programa. Se retornar vazio, não se preocupe — os cards dos parceiros estão sendo exibidos na tela do estudante pelo frontend.
+2. **Dúvidas:** Se o usuário perguntar algo específico sobre os programas, use a `smartResearchTool` passando o 'partner_name'. Se perguntar prazos, use `getImportantDatesTool`.
+3. **Decisão do Estudante:** Quando o estudante disser no chat qual programa ele quer (ex: "Quero a Fundação Estudar", "Instituto Ponte por favor", "quero me aplicar na Aurora"), chame IMEDIATAMENTE a ferramenta `startStudentApplicationTool`.
+4. **Como passar o partner_id:** Você pode passar tanto o UUID (se disponível nos resultados de `getEligibilityResultsTool`) quanto o NOME do parceiro. A ferramenta aceita ambos e resolve internamente. Exemplo: `startStudentApplicationTool(user_id=USER_ID, partner_id="Fundação Estudar")` é válido.
+5. **Não peça confirmação adicional.** Se o estudante já disse qual programa quer, inicie a aplicação imediatamente. Não diga "vou iniciar", apenas CHAME a ferramenta.
+6. **Se o estudante ainda não escolheu:** Faça um resumo simpático dos programas disponíveis (baseado nos resultados de elegibilidade ou no que o frontend exibe) e pergunte qual ele prefere."""
 
-EXEMPLOS DE RACIOCÍNIO:
 
----
-MENSAGEM: "O que quer dizer essa pergunta?"
-CONTEXTO: passport_phase=EVALUATE, form_state.focused_field="motivacao_pessoal", current_partner_id="abc123"
-→ Chame getPartnerFormsTool(partner_id="abc123")
-→ Chame smartResearchTool(query="o que preencher no campo motivação pessoal", program="programs", partner_name="Fundação Estudar")
 
----
-MENSAGEM: "Até quando posso me inscrever na Fundação Estudar?"
-→ Chame getImportantDatesTool(program_type="partners")
 
----
-MENSAGEM: "O que são programas educacionais?"
-→ Chame smartResearchTool(query="o que são programas educacionais", program="programs")
+EVALUATE_REASONING_INSTRUCTION = """Você está na fase EVALUATE. O estudante escolheu um programa parceiro e agora o edital ou formulário oficial desse programa está aberto na tela dele para ser preenchido (student_application).
 
----
-MENSAGEM: "O que devo fazer agora?"
-CONTEXTO: passport_phase=ONBOARDING, form_state={campos parcialmente preenchidos}
-→ Chame smartResearchTool(query="próximos passos do passaporte de elegibilidade", program="passport")
+O user_id e o current_partner_id (da aplicação ativa) estão disponíveis no contexto.
 
----
-MENSAGEM: "Qual programa eu me adequo melhor?"
-→ Chame evaluatePassportEligibilityTool(user_id="USER_ID")
+1. Use `getPartnerFormsTool` passando o ID do parceiro atual para entender todas as regras e campos obrigatórios do edital.
+2. Use `getStudentApplicationTool` para ler o que o estudante já conseguiu preencher e salvar no banco até o momento.
+3. ANALISE O PREENCHIMENTO: Compare o que o estudante já salvou (via tool), o que o edital pede (via partner forms) e o 'ESTADO ATUAL DO FORMULÁRIO DO USUÁRIO' injetado no contexto. 
+4. Se o usuário relatar erros ao salvar ou perguntar sobre um campo, use o contexto de UI (campo em foco e dados atuais) para dar uma explicação técnica e empática do erro.
+5. Atue como o monitor particular dele: Traduza termos complexos, cruze o que ele escreveu com o que o edital pede usando a `smartResearchTool` junto com as regras do `getPartnerFormsTool`.
+6. Você NÃO envia o formulário no final. Apenas o guie, responda às dificuldades de preenchimento e traduza a burocracia até que ele mesmo clique no botão de 'Concluir Inscrição' na UI. O ProfileTool pode ser usado se precisar validar um dado fixo dele."""
 
----
-MENSAGEM: "pra mim mesmo"
-CONTEXTO: passport_phase=ASK_DEPENDENT
-→ Chame processDependentChoiceTool(user_id="USER_ID", choice="self")
 
-DEPOIS DE CHAMAR AS FERRAMENTAS: Faça um resumo técnico dos dados encontrados. Diga qual era a intenção do usuário, quais ferramentas foram usadas e o que foi encontrado. NÃO formate para o usuário final — outro agente fará isso.
-
-REGRA DE PARCIMÔNIA: Use apenas as ferramentas NECESSÁRIAS. Máximo de 3 tools por turno.
-"""
-
-reasoning_agent = LlmAgent(
+onboarding_reasoning_agent = LlmAgent(
     model=MODEL_REASONING,
-    name="reasoning_agent",
-    description="Módulo de raciocínio: analisa intenção, chama ferramentas e produz resumo técnico.",
-    instruction=REASONING_INSTRUCTION,
+    name="onboarding_reasoning_agent",
+    description="Raciocínio para a fase ONBOARDING. Read-only e knowledge tools apenas.",
+    instruction=ONBOARDING_REASONING_INSTRUCTION,
     tools=[
+        getStudentProfileTool,
         smartResearchTool,
-        evaluatePassportEligibilityTool,
         getImportantDatesTool,
-        getPartnerFormsTool,
+        rewindWorkflowStatusTool,
+    ],
+)
+
+dependent_onboarding_reasoning_agent = LlmAgent(
+    model=MODEL_REASONING,
+    name="dependent_onboarding_reasoning_agent",
+    description="Raciocínio para a fase DEPENDENT_ONBOARDING. Read-only e knowledge tools focadas no dependente.",
+    instruction=DEPENDENT_ONBOARDING_REASONING_INSTRUCTION,
+    tools=[
+        getStudentProfileTool,
+        smartResearchTool,
+        getImportantDatesTool,
+        rewindWorkflowStatusTool,
+    ],
+)
+
+ask_dependent_reasoning_agent = LlmAgent(
+    model=MODEL_REASONING,
+    name="ask_dependent_reasoning_agent",
+    description="Raciocínio para a fase ASK_DEPENDENT. Processa a resposta se é para self ou dependent.",
+    instruction=ASK_DEPENDENT_REASONING_INSTRUCTION,
+    tools=[
         getStudentProfileTool,
         processDependentChoiceTool,
+        smartResearchTool,
+        getImportantDatesTool,
+        rewindWorkflowStatusTool,
+    ],
+)
+
+program_match_reasoning_agent = LlmAgent(
+    model=MODEL_REASONING,
+    name="program_match_reasoning_agent",
+    description="Raciocínio para a fase PROGRAM_MATCH. Avalia opções e inicia aplicação.",
+    instruction=PROGRAM_MATCH_REASONING_INSTRUCTION,
+    tools=[
+        getStudentProfileTool,
+        getEligibilityResultsTool,
         startStudentApplicationTool,
+        smartResearchTool,
+        getImportantDatesTool,
+        rewindWorkflowStatusTool,
+    ],
+)
+
+evaluate_reasoning_agent = LlmAgent(
+    model=MODEL_REASONING,
+    name="evaluate_reasoning_agent",
+    description="Raciocínio para a fase EVALUATE. Auxilia no preenchimento lendo o edital e a aplicação existente.",
+    instruction=EVALUATE_REASONING_INSTRUCTION,
+    tools=[
+        getPartnerFormsTool,
+        getStudentApplicationTool,
+        getStudentProfileTool,
+        smartResearchTool,
+        getImportantDatesTool,
         rewindWorkflowStatusTool,
     ],
 )
@@ -215,7 +184,10 @@ PROATIVIDADE — Ao final da sua resposta:
 
 CONTEXTO DA FASE:
 - ONBOARDING: Incentive o preenchimento do formulário ao lado
-- ASK_DEPENDENT: Pergunte se busca para si ou para outra pessoa (se idade >= 18) ou avance direto (se < 18)
+- ASK_DEPENDENT: Use a idade do estudante para ser inteligente.
+  - Se idade < 18: "Vi aqui que você tem [X] anos, acredito que está buscando para você mesmo, né? Ou seria para um irmão ou parente?"
+  - Se idade >= 18: "Vi aqui que você tem [X] anos, você está buscando oportunidades para você mesmo ou para um filho ou parente?"
+  - Sempre ofereça as opções de forma gentil e empática.
 - PROGRAM_MATCH: Apresente resultados de elegibilidade com entusiasmo
 - EVALUATE: Ajude com dúvidas sobre campos do formulário do parceiro
 - CONCLUDED: Parabenize e tire dúvidas finais
@@ -237,19 +209,20 @@ response_agent = LlmAgent(
     tools=[],  # NENHUMA tool — grounded by design
 )
 
-# Agent for CONCLUDED phase — read-only, no DB mutations
 concluded_agent = LlmAgent(
     model=MODEL_CHAT,
     name="concluded_agent",
-    description="Agente para fase CONCLUDED. Apenas tira dúvidas, sem mutações no banco.",
-    instruction="""Você é a Cloudinha. O usuário já CONCLUIU sua aplicação no programa educacional. Parabéns! 🎉
+    description="Agente para fase CONCLUDED. Apenas tira dúvidas e pode iniciar novas aplicações.",
+    instruction="""Você está na fase CONCLUDED. A aplicação atual do estudante foi finalizada e enviada!
     
     O user_id está disponível no início desta instrução como USER_ID_CONTEXT.
     
     NESTA FASE:
-    - Você pode responder dúvidas usando `smartResearchTool` e `getImportantDatesTool`.
-    - Você NÃO DEVE executar nenhuma ferramenta que altere o banco de dados. Nenhuma mutação é permitida.
-    - Seja gentil, parabenize o usuário, e responda o que for perguntado sobre programas, datas, etc.
+    1. Imediatamente celebre a conquista com o estudante!
+    2. Leia o campo `eligibility_results` no `getStudentProfileTool` para analisar para quais OUTROS parceiros o usuário tem um bom match.
+    3. Seja proativo: diga a ele que com as respostas já dadas, ele também tem chances noutros programas (cite-os com base no resultado lido). Pergunte: 'Gostaria de aproveitar seus dados já salvos e tentar aplicar para esse programa também?'
+    4. Se ele aceitar e disser sim explicitamente para um parceiro, use a ferramenta `startStudentApplicationTool` para iniciar esse novo parceiro. O fluxo voltará dinamicamente para a fase EVALUATE.
+    5. Você também deve responder dúvidas usando `smartResearchTool` e `getImportantDatesTool`.
     
     USO DA smartResearchTool — REGRAS DE program:
     - Genérica sobre programas educacionais → program="programs"
@@ -260,9 +233,10 @@ concluded_agent = LlmAgent(
     REGRA ESTRITA: NUNCA diga ao usuário "vou pesquisar" ou "vou verificar na ferramenta". Apenas execute a tool silenciosamente e responda com o resultado.
     """,
     tools=[
+        getStudentProfileTool,
+        startStudentApplicationTool,
         smartResearchTool,
-        getImportantDatesTool,
-        getStudentProfileTool
+        getImportantDatesTool
     ]
 )
 
@@ -284,12 +258,26 @@ class PassportWorkflow(BaseWorkflow):
             }
             
         # Phase 2-5: Active phases use Reasoning → Response pipeline
-        # The workflow.py orchestrator handles the 2-agent chain
         if passport_phase in ["ONBOARDING", "ASK_DEPENDENT", "DEPENDENT_ONBOARDING", "PROGRAM_MATCH", "EVALUATE"]:
+            
+            # Select the specialized reasoning agent based on phase
+            if passport_phase == "ONBOARDING":
+                active_reasoning = onboarding_reasoning_agent
+            elif passport_phase == "ASK_DEPENDENT":
+                active_reasoning = ask_dependent_reasoning_agent
+            elif passport_phase == "DEPENDENT_ONBOARDING":
+                active_reasoning = dependent_onboarding_reasoning_agent
+            elif passport_phase == "PROGRAM_MATCH":
+                active_reasoning = program_match_reasoning_agent
+            elif passport_phase == "EVALUATE":
+                active_reasoning = evaluate_reasoning_agent
+            else:
+                active_reasoning = onboarding_reasoning_agent # fallback
+                
             return {
                 "type": "reasoning_response",
-                "name": "reasoning_response_pipeline",
-                "reasoning_agent": reasoning_agent,
+                "name": f"{passport_phase.lower()}_reasoning_response_pipeline",
+                "reasoning_agent": active_reasoning,
                 "response_agent": response_agent,
             }
         
@@ -322,8 +310,7 @@ class PassportWorkflow(BaseWorkflow):
             fresh_state = getStudentProfileTool(user_id)
             if fresh_state.get("onboarding_completed"):
                 upd["passport_phase"] = "ASK_DEPENDENT"
-            else:
-                upd["_is_turn_complete"] = True
+            upd["_is_turn_complete"] = True
             
         elif passport_phase == "ASK_DEPENDENT":
             # Re-read the DB to check if processDependentChoiceTool already ran
@@ -332,8 +319,7 @@ class PassportWorkflow(BaseWorkflow):
             
             if new_phase != "ASK_DEPENDENT":
                 upd["passport_phase"] = new_phase
-            else:
-                upd["_is_turn_complete"] = True
+            upd["_is_turn_complete"] = True
 
         elif passport_phase == "DEPENDENT_ONBOARDING":
             dependent_id = current_state.get("current_dependent_id")
@@ -367,6 +353,11 @@ class PassportWorkflow(BaseWorkflow):
             upd["_is_turn_complete"] = True
         
         elif passport_phase == "CONCLUDED":
+            fresh_state = getStudentProfileTool(user_id)
+            new_phase = fresh_state.get("passport_phase", "CONCLUDED")
+            
+            if new_phase != "CONCLUDED":
+                upd["passport_phase"] = new_phase
             upd["_is_turn_complete"] = True
                  
         return upd if upd else None
