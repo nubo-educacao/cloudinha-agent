@@ -4,24 +4,29 @@ from src.lib.resilience import retry_with_backoff
 
 @safe_execution(error_type="tool_error", default_return="Desculpe, não consegui realizar a busca na internet no momento.")
 @retry_with_backoff(retries=3)
-def duckDuckGoSearchTool(query: str) -> str:
+def duckDuckGoSearchTool(query: str, site: str = None) -> str:
     """
     Realiza uma busca na internet utilizando o DuckDuckGo.
     Útil para encontrar informações recentes ou que não estão na base de conhecimento interna.
     
     Args:
         query: O termo ou pergunta a ser pesquisada.
+        site: Opcional. Restringe a busca a um domínio específico (ex: 'partners.link').
         
     Returns:
         Um resumo dos resultados encontrados na web.
     """
-    print(f"[DuckDuckGo] Iniciando busca para: '{query}'", flush=True)
+    search_query = query
+    if site:
+        search_query = f"{query} site:{site}"
+        
+    print(f"[DuckDuckGo] Iniciando busca para: '{search_query}'", flush=True)
     
     # Primeira tentativa: com região BR
     try:
         print(f"[DuckDuckGo] Tentativa 1: Busca com região 'br-pt'", flush=True)
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, region="br-pt", max_results=5, safesearch="off", timelimit=None))
+            results = list(ddgs.text(search_query, region="br-pt", max_results=5, safesearch="off", timelimit=None))
             
         print(f"[DuckDuckGo] Resultados obtidos (região BR): {len(results)}", flush=True)
         
@@ -36,14 +41,14 @@ def duckDuckGoSearchTool(query: str) -> str:
     # Exceptions here will be caught by safe_execution
     print(f"[DuckDuckGo] Tentativa 2: Busca SEM restrição de região", flush=True)
     with DDGS() as ddgs:
-        results = list(ddgs.text(query, max_results=5, safesearch="off", timelimit=None))
+        results = list(ddgs.text(search_query, max_results=5, safesearch="off", timelimit=None))
         
     print(f"[DuckDuckGo] Resultados obtidos (global): {len(results)}", flush=True)
     
     if results:
         return format_results(results)
     else:
-        print(f"[DuckDuckGo] ⚠️ NENHUM resultado encontrado para query: '{query}'", flush=True)
+        print(f"[DuckDuckGo] ⚠️ NENHUM resultado encontrado para query: '{search_query}'", flush=True)
         return "Não encontrei resultados na internet para essa busca."
 
 def format_results(results: list) -> str:

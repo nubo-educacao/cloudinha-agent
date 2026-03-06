@@ -21,6 +21,7 @@ from src.tools.rewindWorkflowStatus import rewindWorkflowStatusTool
 from src.tools.getPartnerForms import getPartnerFormsTool
 from src.tools.getStudentApplication import getStudentApplicationTool
 from src.tools.getEligibilityResults import getEligibilityResultsTool
+from src.tools.duckDuckGoSearch import duckDuckGoSearchTool
 
 # ============================================================
 # REASONING AGENTS — Intent classification + Tool selection/execution by Phase
@@ -31,7 +32,7 @@ ONBOARDING_REASONING_INSTRUCTION = """Você está na fase ONBOARDING. O usuário
 O user_id está disponível como USER_ID_CONTEXT no início deste prompt.
 
 Sua função tática é dupla:
-1. **RESPONDER DÚVIDAS E PESQUISAR (PRIORIDADE ALTA)**: O usuário PODE E VAI fazer perguntas sobre prazos, como funcionam os programas parceiros, o que ele ganha com eles, etc. Você DEVE SEMPRE usar as ferramentas `smartResearchTool` e `getImportantDatesTool` para responder a essas dúvidas com precisão. NUNCA se recuse a responder uma dúvida sob o pretexto de que ele precisa terminar o cadastro primeiro.
+1. **RESPONDER DÚVIDAS E PESQUISAR (PRIORIDADE ALTA)**: O usuário PODE E VAI fazer perguntas sobre prazos, como funcionam os programas parceiros, o que ele ganha com eles, etc. Você DEVE SEMPRE usar as ferramentas `smartResearchTool` e `getImportantDatesTool` para responder a essas dúvidas com precisão. O `smartResearchTool` já consulta a nossa base de conhecimento e faz uma busca na web (com foco em 'partners.link') se necessário. NUNCA se recuse a responder uma dúvida sob o pretexto de que ele precisa terminar o cadastro primeiro.
 2. **AUXILIAR NO CADASTRO**: Use `getStudentProfileTool` para ver o que ele já preencheu. Compare com o 'ESTADO ATUAL DO FORMULÁRIO DO USUÁRIO' injetado no contexto. Se ele relatar um erro ("não consigo salvar", "o que falta?"), aponte qual campo precisa ser corrigido com base no contexto injetado. Lembre-o gentilmente de que o preenchimento é feito na tela.
 
 Instruções finais: A resposta exata para dúvidas gerais do passaporte já consta no seu contexto injetado, mas para parceiros/prazos específicos, faça a chamada de tool obrigatória. Não tente realizar avaliações de eligibility ou achar matches definitivos ainda, mas sempre responda as dúvidas dele sobre as oportunidades da plataforma."""
@@ -41,7 +42,7 @@ DEPENDENT_ONBOARDING_REASONING_INSTRUCTION = """Você está na fase DEPENDENT_ON
 O user_id do titular está como USER_ID_CONTEXT. O dependent_id do dependente está no contexto (verifique em current_dependent_id no perfil).
 
 Sua função tática é dupla:
-1. **RESPONDER DÚVIDAS E PESQUISAR (PRIORIDADE ALTA)**: O pai/responsável PODE E VAI fazer perguntas sobre prazos, como funcionam os programas parceiros e o que eles oferecem para o filho dele. Você DEVE SEMPRE usar as ferramentas `smartResearchTool` e `getImportantDatesTool` para responder a essas dúvidas clara e precisamente. NUNCA se recuse a responder uma dúvida sob o pretexto de que ele precisa terminar o cadastro do dependente primeiro.
+1. **RESPONDER DÚVIDAS E PESQUISAR (PRIORIDADE ALTA)**: O pai/responsável PODE E VAI fazer perguntas sobre prazos, como funcionam os programas parceiros e o que eles oferecem para o filho dele. Você DEVE SEMPRE usar as ferramentas `smartResearchTool` e `getImportantDatesTool` para responder a essas dúvidas clara e precisamente. O `smartResearchTool` usará a web (partners.link) como fallback se a base interna for insuficiente. NUNCA se recuse a responder uma dúvida sob o pretexto de que ele precisa terminar o cadastro do dependente primeiro.
 2. **AUXILIAR NO CADASTRO DO DEPENDENTE**: Use `getStudentProfileTool(user_id=ID_DO_DEPENDENTE)` para ver o que já foi salvo no banco. Compare com o 'ESTADO ATUAL DO FORMULÁRIO DO USUÁRIO' injetado no contexto. Se houver dúvidas ou erros relatados na hora de preencher/salvar, oriente-o usando esses dados. O preenchimento deve ser feito na UI visual.
 
 Instruções finais: Não tente realizar avaliações de eligibility ou achar matches definitivos para o dependente ainda. Foco total em tirar as dúvidas abertamente e ajudar a preencher os dados corretamente."""
@@ -247,7 +248,7 @@ class PassportWorkflow(BaseWorkflow):
         return "passport_workflow"
 
     def get_agent_for_user(self, user_id: str, current_state: Dict[str, Any]) -> Optional[Agent]:
-        passport_phase = current_state.get("passport_phase", "INTRO")
+        passport_phase = current_state.get("passport_phase") or "INTRO"
         
         # Phase 1: Greeting
         if passport_phase == "INTRO":
