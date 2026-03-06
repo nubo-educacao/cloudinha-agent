@@ -148,7 +148,19 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
     if "age" in updates:
         profile_updates["age"] = updates["age"]
     if "full_name" in updates:
-        profile_updates["full_name"] = updates["full_name"]
+        raw_name = updates["full_name"].strip()
+        # Title case with preposition handling (da, de, do, dos, das, e)
+        PREPOSITIONS = {"da", "de", "do", "dos", "das", "e"}
+        words = raw_name.split()
+        capitalized = []
+        for i, word in enumerate(words):
+            if i > 0 and word.lower() in PREPOSITIONS:
+                capitalized.append(word.lower())
+            else:
+                capitalized.append(word.capitalize())
+        profile_updates["full_name"] = " ".join(capitalized)
+        print(f"!!! [NAME STANDARDIZED] '{raw_name}' -> '{profile_updates['full_name']}'")
+
     if "academic_goal" in updates:
         profile_updates["education"] = updates["academic_goal"] # Support legacy input key
     if "education" in updates:
@@ -157,6 +169,34 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
         profile_updates["onboarding_completed"] = updates["onboarding_completed"]
     if "active_workflow" in updates:
         profile_updates["active_workflow"] = updates["active_workflow"]
+    if "isdependent" in updates:
+        profile_updates["isdependent"] = updates["isdependent"]
+    if "parent_user_id" in updates:
+        profile_updates["parent_user_id"] = updates["parent_user_id"]
+    if "passport_phase" in updates:
+        profile_updates["passport_phase"] = updates["passport_phase"]
+    if "current_dependent_id" in updates:
+        profile_updates["current_dependent_id"] = updates["current_dependent_id"]
+    if "zip_code" in updates:
+        profile_updates["zip_code"] = updates["zip_code"]
+    if "street" in updates:
+        profile_updates["street"] = updates["street"]
+    if "street_number" in updates:
+        profile_updates["street_number"] = updates["street_number"]
+    if "complement" in updates:
+        profile_updates["complement"] = updates["complement"]
+    if "state_name" in updates:
+        raw_state = updates["state_name"]
+        standardized_state = standardize_state(raw_state)
+        if standardized_state:
+            profile_updates["state"] = standardized_state
+            print(f"!!! [STATE STANDARDIZED] '{raw_state}' -> '{standardized_state}'")
+        else:
+            profile_updates["state"] = raw_state
+            print(f"!!! [STATE NOT FOUND] Keeping original: '{raw_state}'")
+
+    if "relationship" in updates:
+        profile_updates["relationship"] = updates["relationship"]
 
     if profile_updates:
         data = profile_updates.copy()

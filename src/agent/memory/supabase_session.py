@@ -31,34 +31,23 @@ class SupabaseSession(Session):
         return None
 
     def load(self) -> List[Content]:
-        """Loads messages from Supabase."""
+        """Loads messages from Supabase (all workflows, for router context)."""
         if not self.client:
              print("Warning: Supabase client not set in session.")
              return []
         try:
-            # Dynamic Workflow Fetch
             active_wf = self._get_active_workflow()
             print(f"[SupabaseSession] Loading with active_workflow Context: {active_wf}")
-
-            # [FIX] Removed strict workflow filtering to solve "Amnesia" issues.
-            # We now load the last 30 messages globally to preserve context across workflow switches.
-            
-            print(f"[SupabaseSession DEBUG] Entering load() for user {self.user_id}")
             
             query = self.client.table("chat_messages") \
                 .select("*") \
                 .eq("user_id", self.user_id) \
                 .order("created_at", desc=True) \
                 .limit(30)
-            
-            # Remove validation of active_wf for SELECT - Context > Isolation
-            # if active_wf:
-            #    query = query.eq("workflow", active_wf)
                 
             response = query.execute()
             
             messages = []
-            # Reverse because we fetched desc for limit
             data = response.data[::-1] if response.data else []
             
             print(f"[SupabaseSession DEBUG] load() fetched {len(data)} messages from DB")
@@ -75,6 +64,38 @@ class SupabaseSession(Session):
             return messages
         except Exception as e:
             print(f"Error loading session from Supabase: {e}")
+            return []
+
+    def load_for_workflow(self, workflow_name: str, limit: int = 20) -> List[Content]:
+        """Loads messages filtered by a specific workflow."""
+        if not self.client:
+             return []
+        try:
+            query = self.client.table("chat_messages") \
+                .select("*") \
+                .eq("user_id", self.user_id) \
+                .eq("workflow", workflow_name) \
+                .order("created_at", desc=True) \
+                .limit(limit)
+                
+            response = query.execute()
+            
+            messages = []
+            data = response.data[::-1] if response.data else []
+            
+            print(f"[SupabaseSession] load_for_workflow('{workflow_name}') fetched {len(data)} messages")
+
+            for record in data:
+                role = "user" if record["sender"] == "user" else "model"
+                content = Content(
+                    role=role,
+                    parts=[Part(text=record["content"])]
+                )
+                messages.append(content)
+            
+            return messages
+        except Exception as e:
+            print(f"Error loading workflow messages from Supabase: {e}")
             return []
 
     def save(self, messages: List[Content]):

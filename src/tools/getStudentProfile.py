@@ -43,7 +43,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
     profile_data = None
     # Use simple select and handle list manually to avoid maybe_single 406 issues
     profile_response = supabase.table("user_profiles") \
-        .select("full_name, city, age, education, onboarding_completed, active_workflow") \
+        .select("full_name, city, age, education, onboarding_completed, active_workflow, passport_phase, isdependent, parent_user_id, current_dependent_id, zip_code, state, street, street_number, complement") \
         .eq("id", user_id) \
         .execute()
     
@@ -53,17 +53,7 @@ def getStudentProfileTool(user_id: str) -> Dict:
     
     # print(f"!!! [DEBUG READ] getStudentProfileTool raw profile for {user_id}: {profile_data}")
 
-    # Fetch detailed scores history
-    scores_history = []
-    
-    scores_response = supabase.table("user_enem_scores") \
-        .select("year, nota_linguagens, nota_ciencias_humanas, nota_ciencias_natureza, nota_matematica, nota_redacao") \
-        .eq("user_id", user_id) \
-        .order("year", desc=True) \
-        .execute()
-    
-    if scores_response and hasattr(scores_response, 'data'):
-        scores_history = scores_response.data
+    # (ENEM Scores History fetch removed to avoid agent confusion and optimize query)
 
     # Fetch user preferences
     preferences_data = None
@@ -77,41 +67,40 @@ def getStudentProfileTool(user_id: str) -> Dict:
             # Fixed indentation
                 preferences_data = preferences_response.data[0]
     
-    # Calculate onboarding status
+    # Calculate onboarding status dynamically
     onboarding_completed = False
     if profile_data:
-        if profile_data.get("onboarding_completed"):
-            onboarding_completed = True
-        else:
-                onboarding_completed = bool(
-                profile_data.get("full_name") and 
-                profile_data.get("city") and 
-                profile_data.get("education") and
-                profile_data.get("age") 
-            )
+        # Check if all required fields are present
+        has_name = bool(profile_data.get("full_name"))
+        has_age = bool(profile_data.get("age"))
+        has_city = bool(profile_data.get("city"))
+        has_education = bool(profile_data.get("education"))
+        has_zip = bool(profile_data.get("zip_code"))
+        has_street_number = bool(profile_data.get("street_number"))
+        
+        onboarding_completed = has_name and has_age and has_city and has_education and has_zip and has_street_number
 
     result = {
         "user_id": user_id,
         "onboarding_completed": onboarding_completed,
         "active_workflow": profile_data.get("active_workflow") if profile_data else None,
+        "passport_phase": profile_data.get("passport_phase", "INTRO") if profile_data else "INTRO",
+        "isdependent": profile_data.get("isdependent", False) if profile_data else False,
+        "parent_user_id": profile_data.get("parent_user_id") if profile_data else None,
+        "current_dependent_id": profile_data.get("current_dependent_id") if profile_data else None,
         "full_name": profile_data.get("full_name") if profile_data else None,
         "registered_city_name": profile_data.get("city") if profile_data else None,
         "age": profile_data.get("age") if profile_data else None,
         "education": profile_data.get("education") if profile_data else None,
+        "zip_code": profile_data.get("zip_code") if profile_data else None,
+        "state": profile_data.get("state") if profile_data else None,
+        "street": profile_data.get("street") if profile_data else None,
+        "street_number": profile_data.get("street_number") if profile_data else None,
+        "complement": profile_data.get("complement") if profile_data else None,
         "enem_score": preferences_data.get("enem_score") if preferences_data else None,
-        "enem_scores_history": scores_history,
         "per_capita_income": preferences_data.get("family_income_per_capita") if preferences_data else None,
-        "course_interest": preferences_data.get("course_interest") if preferences_data else None,
-        "location_preference": preferences_data.get("location_preference") if preferences_data else None,
-        "state_preference": preferences_data.get("state_preference") if preferences_data else None,
         "quota_types": preferences_data.get("quota_types", []) if preferences_data else [],
-        "preferred_shifts": preferences_data.get("preferred_shifts", []) if preferences_data else [],
-        "university_preference": preferences_data.get("university_preference") if preferences_data else None,
-        "program_preference": preferences_data.get("program_preference") if preferences_data else None,
-        "device_latitude": preferences_data.get("device_latitude") if preferences_data else None,
-        "device_longitude": preferences_data.get("device_longitude") if preferences_data else None,
-        "workflow_data": preferences_data.get("workflow_data") if preferences_data else {},
-        "registration_step": preferences_data.get("registration_step") if preferences_data else None
+        "eligibility_results": profile_data.get("eligibility_results", []) if profile_data else []
     }
 
     # Save to cache (Disabled)

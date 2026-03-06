@@ -1,6 +1,7 @@
 from typing import AsyncGenerator, Any, Dict, Optional
 import asyncio
 import httpx
+import json
 from google.adk.runners import Runner
 from google.adk.agents import LlmAgent, Agent
 from google.genai.types import Content, Part
@@ -13,22 +14,121 @@ from src.agent.retrieval import retrieve_similar_examples
 from src.tools.getStudentProfile import getStudentProfileTool
 from src.tools.updateStudentProfile import updateStudentProfileTool
 import logging
+import datetime
+import traceback
+from src.lib.supabase import supabase
 
-# Workflows
+def _log_tool_error(user_id: str, session_id: str, tool_name: str, error_msg: str, tb: str = None, args=None, raw_output=None, error_type: str = "tool_error"):
+    try:
+        error_data = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "error_type": error_type,
+            "error_message": error_msg,
+            "stack_trace": tb,
+            "metadata": {
+                "tool_name": tool_name,
+                "args": args,
+                "raw_output": raw_output
+            }
+        }
+        supabase.table("agent_errors").insert(error_data).execute()
+        print(f"[Workflow] Logged {error_type} for {tool_name}: {error_msg}")
+    except Exception as e:
+        print(f"[Workflow] Error logging tool error to DB: {e}")
+
+def _is_empty_tool_result(resp_dict: dict) -> bool:
+    """Check if a tool response is functionally empty (no useful data returned)."""
+    if not resp_dict:
+        return True
+    result = resp_dict.get("result")
+    if result is None:
+        return True
+    if isinstance(result, (list, dict, str)) and len(result) == 0:
+        return True
+    # Also check top-level data key (some tools return {"data": [...]})
+    data = resp_dict.get("data")
+    if data is not None and isinstance(data, (list, dict, str)) and len(data) == 0:
+        return True
+    return False
+
+# Legacy Workflows (Removed from primary registry to enforce Passei Workflow)
 from src.agent.base_workflow import SingleAgentWorkflow
-from src.agent.onboarding_workflow import onboarding_workflow
-from src.agent.match_workflow import MatchWorkflow
+from src.agent.passport_workflow import PassportWorkflow
 
-# Initialize Registry
+# Initialize Registry with only the new enforced flow
 workflow_registry = {
-    "match_workflow": MatchWorkflow(),
-    "sisu_workflow": SingleAgentWorkflow(sisu_agent, "sisu_workflow"),
-    "prouni_workflow": SingleAgentWorkflow(prouni_agent, "prouni_workflow"),
-    "onboarding_workflow": onboarding_workflow
+    "passport_workflow": PassportWorkflow()
 }
 
-# Wrapper for Root (Default)
+# Wrapper for Root (Fallback only)
 root_workflow = SingleAgentWorkflow(root_agent, "root_workflow")
+
+# --- Knowledge Base Paths (injected into reasoning/concluded agents) ---
+import os
+_DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "documents")
+_PASSPORT_DOC_PATH = os.path.join(_DOCS_DIR, "passei_workflow_doc.md")
+_GENERAL_KNOWLEDGE_PATH = os.path.join(_DOCS_DIR, "partners", "Base de conhecimento geral.md")
+
+# Cache to avoid re-reading files on every turn
+_knowledge_cache = {}
+
+def _load_knowledge_context() -> str:
+    """Pre-loads knowledge base content and returns formatted context string."""
+    if "content" in _knowledge_cache:
+        return _knowledge_cache["content"]
+    
+    print(f"[Workflow] Loading knowledge base files...")
+    
+    sections = []
+    
+    process_summary = """=== COMO FUNCIONA O PASSAPORTE DA ELIGIBILIDADE ===
+
+O Passaporte da Eligibilidade é um processo guiado pela Cloudinha que ajuda estudantes a encontrar e se candidatar a programas educacionais parceiros. Funciona assim:
+
+ETAPA 1 - ONBOARDING (Cadastro de dados):
+O estudante preenche um formulário com seus dados básicos: nome, idade, cidade, escolaridade, CEP e endereço. Esses dados são essenciais para avaliar a elegibilidade nos programas parceiros.
+
+ETAPA 2 - ESCOLHA DO CANDIDATO:
+Após o cadastro, perguntamos se o estudante busca uma oportunidade para si próprio ou para outra pessoa (um dependente, como filho ou familiar).
+
+ETAPA 3 - ANÁLISE DE ELEGIBILIDADE (Program Match):
+Com base nos dados informados, o sistema analisa automaticamente quais programas parceiros o estudante atende aos critérios (como idade, renda, escolaridade). A Cloudinha apresenta os resultados.
+
+ETAPA 4 - APLICAÇÃO (Evaluate):
+O estudante escolhe um programa e preenche o formulário específico do parceiro. A Cloudinha tira dúvidas sobre o edital e os campos do formulário.
+
+ETAPA 5 - CONCLUSÃO:
+Após enviar a aplicação, o processo está completo. O estudante pode continuar tirando dúvidas.
+
+PARCEIROS DISPONÍVEIS:
+- Fundação Estudar: Programas de desenvolvimento e bolsas para estudantes de alto potencial.
+- Instituto Ponte: Apoio educacional focado em acesso a escolas de excelência.
+- Programa Aurora | Instituto Sol: Programa de formação complementar e mentoria.
+
+O QUE SÃO PROGRAMAS DE APOIO EDUCACIONAL:
+São iniciativas de organizações da sociedade civil que ampliam oportunidades de formação acadêmica. NÃO se limitam a bolsas financeiras — podem incluir aulas complementares, mentoria, orientação de carreira, desenvolvimento socioemocional, preparação para processos seletivos e mais.
+"""
+    sections.append(process_summary)
+    print("[Workflow] ✅ Process summary loaded")
+    
+    if os.path.exists(_GENERAL_KNOWLEDGE_PATH):
+        try:
+            with open(_GENERAL_KNOWLEDGE_PATH, "r", encoding="utf-8") as f:
+                content = f.read()
+            if content.strip():
+                sections.append(f"=== BASE DE CONHECIMENTO DETALHADA SOBRE PROGRAMAS EDUCACIONAIS ===\n{content}")
+                print(f"[Workflow] ✅ Loaded Base de conhecimento geral.md ({len(content)} chars)")
+        except Exception as e:
+            print(f"[Workflow] ❌ Erro ao ler {_GENERAL_KNOWLEDGE_PATH}: {e}")
+    else:
+        print(f"[Workflow] ❌ Base de conhecimento geral.md NOT FOUND at {_GENERAL_KNOWLEDGE_PATH}")
+    
+    result = "\nBASE DE CONHECIMENTO — USE ESTAS INFORMAÇÕES PARA RESPONDER PERGUNTAS DO ESTUDANTE:\n" + "\n\n".join(sections) + "\n--- FIM DA BASE DE CONHECIMENTO ---\n"
+    print(f"[Workflow] ✅ Knowledge context ready ({len(result)} chars total)")
+    
+    _knowledge_cache["content"] = result
+    return result
 
 class SimpleTextEvent:
     def __init__(self, text: str):
@@ -37,13 +137,171 @@ class SimpleTextEvent:
 def check_authentication(user_id: str) -> bool:
     return bool(user_id and user_id.strip() != "" and user_id != "anon-user")
 
+
+def _build_default_context(user_id: str, profile_state: Dict, chat_history: str, ui_form_state: Optional[Dict]) -> str:
+    """Builds the default context string injected into both Reasoning and Response agents."""
+    
+    # 1. Profile context
+    profile_context = "\nPERFIL ATUAL DO ESTUDANTE:\n"
+    for k, v in profile_state.items():
+        if v is not None and str(v).strip() != "":
+            profile_context += f"- {k}: {v}\n"
+    profile_context += "\n"
+    
+    # 2. Form state context (from frontend, always injected — not a tool)
+    form_context = ""
+    if ui_form_state is not None:
+        focused_field = ui_form_state.get("_focused_field", "Nenhum")
+        form_data = {k: v for k, v in ui_form_state.items() if not k.startswith("_")}
+        form_json = json.dumps(form_data, ensure_ascii=False)
+        form_context = f"\nESTADO ATUAL DO FORMULÁRIO DO USUÁRIO: {form_json}\nCAMPO EM FOCO: {focused_field}\n"
+    
+    return profile_context + form_context + chat_history
+
+
+async def _run_reasoning_agent(
+    reasoning_agent: LlmAgent,
+    user_id: str,
+    session_id: str,
+    message: Content,
+    default_context: str,
+    knowledge_context: str,
+) -> str:
+    """Runs the Reasoning Agent and returns its raw text output."""
+    
+    enriched_instruction = (
+        f"USER_ID_CONTEXT: {user_id}\n\n"
+        + reasoning_agent.instruction
+        + "\n\n" + default_context
+        + "\n" + knowledge_context
+    )
+    
+    runnable = LlmAgent(
+        model=reasoning_agent.model,
+        name=reasoning_agent.name,
+        description=reasoning_agent.description,
+        instruction=enriched_instruction,
+        tools=reasoning_agent.tools,
+        output_key=reasoning_agent.output_key,
+    )
+    
+    transient_session = InMemorySessionService()
+    await transient_session.create_session(
+        app_name="reasoning_pipeline",
+        session_id=session_id,
+        user_id=user_id,
+    )
+    
+    runner = Runner(agent=runnable, app_name="reasoning_pipeline", session_service=transient_session)
+    
+    captured = ""
+    last_tool_args = {}  # Track args from tool_start to pair with tool_end
+    async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=message):
+        if hasattr(event, 'text') and event.text:
+            captured += event.text
+        elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
+            for p in event.content.parts:
+                if hasattr(p, 'text') and p.text:
+                    captured += p.text
+                elif hasattr(p, 'function_call') and p.function_call is not None:
+                    tool_name = p.function_call.name
+                    args = dict(p.function_call.args) if hasattr(p.function_call, 'args') else {}
+                    last_tool_args[tool_name] = args
+                    yield {"type": "tool_start", "tool": tool_name, "args": args}
+                elif hasattr(p, 'function_response') and p.function_response is not None:
+                    tool_name = p.function_response.name
+                    
+                    # Convert response to dict if it's not already (ADK typically returns dicts for function_response.response)
+                    resp = p.function_response.response
+                    resp_dict = resp if isinstance(resp, dict) else {"result": str(resp)}
+                    
+                    # Yield tool end
+                    yield {"type": "tool_end", "tool": tool_name, "output": json.dumps(resp_dict, ensure_ascii=False)}
+                    
+                    tool_args = last_tool_args.pop(tool_name, None)
+                    
+                    # Check for explicit failure flag
+                    if resp_dict.get("success") is False:
+                        _log_tool_error(
+                            user_id=user_id,
+                            session_id=session_id,
+                            tool_name=tool_name,
+                            error_msg=str(resp_dict.get("error", "Unknown tool error")),
+                            args=tool_args,
+                            raw_output=str(resp_dict),
+                            error_type="tool_error"
+                        )
+                    # Check for empty result (functionally an error — tool returned no useful data)
+                    elif _is_empty_tool_result(resp_dict):
+                        _log_tool_error(
+                            user_id=user_id,
+                            session_id=session_id,
+                            tool_name=tool_name,
+                            error_msg=f"Tool '{tool_name}' returned empty result",
+                            args=tool_args,
+                            raw_output=str(resp_dict),
+                            error_type="tool_empty_result"
+                        )
+                        
+    # Yield the final accumulated reasoning text
+    yield {"type": "final_text", "text": captured}
+
+
+async def _run_response_agent(
+    response_agent: LlmAgent,
+    user_id: str,
+    session_id: str,
+    reasoning_report: str,
+    user_message: str,
+    default_context: str,
+) -> AsyncGenerator[Any, None]:
+    """Runs the Response Agent with the reasoning report and streams output."""
+    
+    response_input_text = f"""MENSAGEM ORIGINAL DO USUÁRIO:
+{user_message}
+
+RELATÓRIO TÉCNICO DO MÓDULO DE RACIOCÍNIO:
+{reasoning_report}
+
+{default_context}
+"""
+    
+    enriched_instruction = (
+        f"USER_ID_CONTEXT: {user_id}\n\n"
+        + response_agent.instruction
+    )
+    
+    runnable = LlmAgent(
+        model=response_agent.model,
+        name=response_agent.name,
+        description=response_agent.description,
+        instruction=enriched_instruction,
+        tools=[],  # No tools — grounded by design
+        output_key=response_agent.output_key,
+    )
+    
+    runner = Runner(agent=runnable, app_name="cloudinha-agent", session_service=session_service)
+    
+    response_message = Content(role="user", parts=[Part(text=response_input_text)])
+    
+    async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=response_message):
+        yield event
+
+
 async def run_workflow(
     user_id: str,
     session_id: str,
-    new_message: Content
+    new_message: Content,
+    ui_form_state: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[Any, None]:
     """
     Orchestrates the generic agent workflow.
+    
+    Supports three step types:
+    - "scripted": Deterministic messages (no LLM)
+    - "action": Deterministic state updates (no LLM)
+    - "reasoning_response": 2-agent pipeline (Reasoning → Response)
+    - LlmAgent: Single agent execution (legacy/concluded)
     """
     if not check_authentication(user_id):
         yield SimpleTextEvent("Desculpe, não posso falar com você se não estiver logado.")
@@ -52,27 +310,58 @@ async def run_workflow(
     # 0. Fetch Initial State
     profile_state = getStudentProfileTool(user_id)
     
-    # Pre-loop Router check (Steps == 0 logic)
-    # Only run Router if onboarding is complete
-    if profile_state.get("onboarding_completed"):
-        msg_text = new_message.parts[0].text if new_message.parts else ""
-        decision = await execute_router_agent(user_id, session_id, msg_text, profile_state)
+    msg_text = new_message.parts[0].text if new_message.parts else ""
+    
+    # Fetch Recent History from Session
+    recent_history_str = ""
+    chat_history_for_agent = ""
+    active_wf = profile_state.get("active_workflow")
+    try:
+        session = await session_service.get_session("cloudinha-agent", session_id, user_id)
         
-        if decision:
-             intent = decision.get("intent")
-             target = decision.get("target_workflow")
-             
-             if intent == "CHANGE_WORKFLOW" and target:
-                 yield {"type": "tool_start", "tool": "RouterAgent", "args": {"action": "switch", "target": target}}
-                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": target})
-                 profile_state = getStudentProfileTool(user_id) # Refresh
-                 yield {"type": "tool_end", "tool": "RouterAgent", "output": f"Sent to {target}"}
-                 
-             elif intent == "EXIT_WORKFLOW":
-                 yield {"type": "tool_start", "tool": "RouterAgent", "args": {"action": "exit"}}
-                 updateStudentProfileTool(user_id=user_id, updates={"active_workflow": None})
-                 profile_state = getStudentProfileTool(user_id) # Refresh
-                 yield {"type": "tool_end", "tool": "RouterAgent", "output": "Exited workflow"}
+        if active_wf and hasattr(session, 'load_for_workflow'):
+            workflow_history = session.load_for_workflow(active_wf, limit=20)
+        else:
+            workflow_history = session.load()[-20:] if session.load() else []
+        
+        agent_history_lines = []
+        for m in workflow_history:
+            role_label = "Usuário" if m.role == "user" else "Cloudinha"
+            txt = ""
+            if m.parts:
+                for p in m.parts:
+                    if p.text: txt += p.text
+            if txt:
+                agent_history_lines.append(f"{role_label}: {txt}")
+        
+        if agent_history_lines:
+            chat_history_for_agent = "\nHISTÓRICO DA CONVERSA (últimas mensagens):\n" + "\n".join(agent_history_lines) + "\n---\n"
+        
+        all_history = session.load()
+        last_messages_for_router = all_history[-10:] if all_history else []
+        router_history_lines = []
+        for m in last_messages_for_router:
+            role_label = "Usuário" if m.role == "user" else "Cloudinha (Bot)"
+            txt = ""
+            if m.parts:
+                for p in m.parts:
+                    if p.text: txt += p.text
+            if txt:
+                router_history_lines.append(f"{role_label}: {txt}")
+        
+        recent_history_str = "\n".join(router_history_lines)
+
+    except Exception as e:
+        print(f"[RunWorkflow] Context Fetch Error: {e}")
+
+    # Force passport_workflow
+    if active_wf != "passport_workflow":
+        print(f"[RunWorkflow] Forcing workflow -> 'passport_workflow'")
+        updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "passport_workflow"})
+        profile_state = getStudentProfileTool(user_id)
+        active_wf = "passport_workflow"
+    
+    profile_state["active_workflow"] = "passport_workflow"
 
     # Main Loop
     MAX_STEPS = 10
@@ -81,39 +370,216 @@ async def run_workflow(
 
     while steps_run < MAX_STEPS:
         
-        # 1. Determine Active Workflow
-        active_workflow_name = profile_state.get("active_workflow")
-        workflow_obj = None
+        # 1. Determine Active Workflow (Always passport_workflow now)
+        workflow_obj = workflow_registry["passport_workflow"]
 
-        if not profile_state.get("onboarding_completed"):
-            workflow_obj = workflow_registry["onboarding_workflow"]
-            # Enforce state consistency
-            if active_workflow_name != "onboarding_workflow":
-                updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "onboarding_workflow"})
-                active_workflow_name = "onboarding_workflow" 
+        # 2. Get step from Workflow
+        step = workflow_obj.get_agent_for_user(user_id, profile_state)
         
-        elif active_workflow_name in workflow_registry:
-            workflow_obj = workflow_registry[active_workflow_name]
-        
-        else:
-            workflow_obj = root_workflow # Default
-
-        # 2. Get Agent from Workflow
-        # Pass copy of state to be safe? getStudentProfileTool returns dict.
-        agent = workflow_obj.get_agent_for_user(user_id, profile_state)
-        
-        if not agent:
-             # Workflow returned None, meaning it's done or yielded without agent
-             # For Onboarding, this means complete. for Match, handled internally.
-             # If we are here, essentially we break or fallback to Root?
-             # If Onboarding finished, we break loop to let user reply?
+        if not step:
              print(f"[RunWorkflow] Workflow {workflow_obj.name} returned NO agent. Ending turn.")
              break
 
+        # --- ACTION STEP (deterministic state update, no LLM) ---
+        if isinstance(step, dict) and step.get("type") == "action":
+             action_func = step.get("func")
+             action_name = step.get("name", "action_step")
+             print(f"[RunWorkflow] Action step: {action_name} (Workflow: {workflow_obj.name})")
+             
+             user_text = current_message.parts[0].text if current_message.parts else ""
+             
+             if action_func:
+                 action_updates = action_func(user_id, profile_state, user_text)
+                 if action_updates:
+                     db_updates = {k: v for k, v in action_updates.items() if not k.startswith("_")}
+                     if db_updates:
+                         updateStudentProfileTool(user_id=user_id, updates=db_updates)
+                     profile_state.update(action_updates)
+                     
+                     if action_updates.get("_is_turn_complete"):
+                         print("[RunWorkflow] Turn marked as complete by action step.")
+                         break
+             
+             steps_run += 1
+             continue
+
+        # --- SCRIPTED MESSAGE (deterministic output, no LLM) ---
+        if isinstance(step, dict) and step.get("type") == "scripted":
+            scripted_message = step.get("message", "")
+            scripted_name = step.get("name", "scripted_step")
+            print(f"[RunWorkflow] Scripted step: {scripted_name} (Workflow: {workflow_obj.name})")
+            
+            yield SimpleTextEvent(scripted_message)
+            captured_output = scripted_message
+            
+            updates = workflow_obj.handle_step_completion(user_id, profile_state, captured_output)
+            if updates:
+                db_updates = {k: v for k, v in updates.items() if not k.startswith("_")}
+                if db_updates:
+                    updateStudentProfileTool(user_id=user_id, updates=db_updates)
+                profile_state.update(updates)
+                
+                if updates.get("_is_turn_complete"):
+                    print("[RunWorkflow] Turn marked as complete by scripted step. Ending turn.")
+                    break
+            
+            steps_run += 1
+            continue
+
+        # --- REASONING → RESPONSE PIPELINE (2-agent chain) ---
+        if isinstance(step, dict) and step.get("type") == "reasoning_response":
+            r_agent = step["reasoning_agent"]
+            resp_agent = step["response_agent"]
+            pipeline_name = step.get("name", "reasoning_response_pipeline")
+            print(f"[RunWorkflow] ▶ Reasoning→Response pipeline: {pipeline_name} (Workflow: {workflow_obj.name})")
+            
+            # Build default context (shared by both agents)
+            default_context = _build_default_context(user_id, profile_state, chat_history_for_agent, ui_form_state)
+            knowledge_context = _load_knowledge_context()
+            
+            yield {"type": "tool_start", "tool": "reasoning_agent", "args": {"workflow": workflow_obj.name}}
+            
+            # === STEP 1: Reasoning Agent ===
+            print(f"[RunWorkflow] 🧠 Running Reasoning Agent...")
+            reasoning_raw = ""
+            max_retries = 3
+            
+            for attempt in range(max_retries):
+                try:
+                    async for r_event in _run_reasoning_agent(
+                        reasoning_agent=r_agent,
+                        user_id=user_id,
+                        session_id=session_id,
+                        message=current_message,
+                        default_context=default_context,
+                        knowledge_context=knowledge_context,
+                    ):
+                        if isinstance(r_event, dict):
+                            if r_event.get("type") in ["tool_start", "tool_end"]:
+                                yield r_event
+                            elif r_event.get("type") == "final_text":
+                                reasoning_raw = r_event.get("text", "")
+                    break
+                except Exception as e:
+                    import traceback
+                    print(f"[RunWorkflow] Reasoning attempt {attempt+1}/{max_retries} failed: {e}")
+                    
+                    _log_tool_error(
+                        user_id=user_id,
+                        session_id=session_id,
+                        tool_name="reasoning_agent",
+                        error_msg=str(e),
+                        tb=traceback.format_exc(),
+                        error_type="reasoning_agent_error"
+                    )
+                    
+                    if attempt == max_retries - 1:
+                        yield {"type": "error", "message": "Estou com dificuldades de conexão ou limite de uso excedido. Tente novamente em alguns minutos."}
+                        yield {"type": "tool_end", "tool": "reasoning_agent", "output": "Failed", "success": False}
+                        return
+                    await asyncio.sleep(2 ** attempt)
+            
+            # Log reasoning output
+            user_msg_text = current_message.parts[0].text if current_message.parts else ""
+            
+            print(f"[RunWorkflow] 🧠 Reasoning complete. Report length: {len(reasoning_raw)} chars")
+            print(f"[RunWorkflow] 🧠 Report preview: {reasoning_raw[:300]}...")
+            
+            yield {"type": "tool_end", "tool": "reasoning_agent", "output": "Reasoning Complete"}
+            
+            # === STEP 2: Response Agent ===
+            print(f"[RunWorkflow] 💬 Running Response Agent...")
+            yield {"type": "tool_start", "tool": "response_agent", "args": {"workflow": workflow_obj.name}}
+            
+            captured_output = ""
+            
+            for attempt in range(max_retries):
+                try:
+                    async for event in _run_response_agent(
+                        response_agent=resp_agent,
+                        user_id=user_id,
+                        session_id=session_id,
+                        reasoning_report=reasoning_raw,
+                        user_message=user_msg_text,
+                        default_context=default_context,
+                    ):
+                        final_event = workflow_obj.transform_event(event, resp_agent.name)
+                        
+                        if final_event:
+                            if hasattr(final_event, 'text') and final_event.text:
+                                captured_output += final_event.text
+                            elif isinstance(final_event, dict) and final_event.get("output"):
+                                captured_output += final_event.get("output", "")
+                            yield final_event
+                        else:
+                            if hasattr(event, 'text') and event.text:
+                                captured_output += event.text
+                            elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
+                                for p in event.content.parts:
+                                    if hasattr(p, 'text') and p.text:
+                                        captured_output += p.text
+                    break
+                except Exception as e:
+                    import traceback
+                    print(f"[RunWorkflow] Response attempt {attempt+1}/{max_retries} failed: {e}")
+                    
+                    _log_tool_error(
+                        user_id=user_id,
+                        session_id=session_id,
+                        tool_name="response_agent",
+                        error_msg=str(e),
+                        tb=traceback.format_exc(),
+                        error_type="response_agent_error"
+                    )
+                    
+                    if attempt == max_retries - 1:
+                        yield {"type": "error", "message": "Estou com dificuldades de conexão ou limite de uso excedido. Tente novamente em alguns minutos."}
+                        break
+                    await asyncio.sleep(2 ** attempt)
+                    captured_output = ""
+            
+            yield {"type": "tool_end", "tool": "response_agent", "output": "Response Complete"}
+            
+            # Handle Completion / Transitions
+            updates = workflow_obj.handle_step_completion(user_id, profile_state, captured_output)
+            
+            state_changed = False
+            if updates:
+                db_updates = {k: v for k, v in updates.items() if not k.startswith("_")}
+                if db_updates:
+                    updateStudentProfileTool(user_id=user_id, updates=db_updates)
+                profile_state.update(updates)
+                state_changed = True
+                
+                new_workflow = updates.get("active_workflow")
+                is_turn_complete = updates.get("_is_turn_complete")
+
+                if "active_workflow" in updates and new_workflow is None:
+                     print("[RunWorkflow] Workflow exited explicitly (None). Ending turn.")
+                     break
+                
+                if is_turn_complete:
+                     print("[RunWorkflow] Turn marked as complete by workflow. Ending turn.")
+                     break
+
+                if "active_workflow" in updates:
+                     print(f"[RunWorkflow] State update triggered workflow change: {new_workflow}")
+            
+            steps_run += 1
+            
+            if not state_changed and not updates:
+                 break
+            
+            if steps_run >= MAX_STEPS:
+                print("[RunWorkflow] Max steps reached.")
+            
+            continue
+
+        # --- SINGLE LLM AGENT (legacy/concluded) ---
+        agent = step
         print(f"[RunWorkflow] Executing agent: {agent.name} (Workflow: {workflow_obj.name})")
 
-        # 3. Dynamic RAG / Instruction Injection
-        # We need to inject examples. Identify category.
+        # Dynamic RAG / Instruction Injection
         intent_cat = "general_qa"
         if "sisu" in agent.name: intent_cat = "sisu"
         elif "prouni" in agent.name: intent_cat = "prouni"
@@ -122,37 +588,45 @@ async def run_workflow(
         user_query_text = current_message.parts[0].text if current_message.parts else ""
         examples = retrieve_similar_examples(user_query_text, intent_cat)
         
-        # Create Runner Instance (Clone agent with new instruction)
-        # Note: We append examples to existing instruction.
-        # This handles the "context injection" done by MatchWorkflow too (it appended to instruction).
+        # Build context for single agent
+        profile_context_str = "\nPERFIL ATUAL DO ESTUDANTE:\n"
+        for k, v in profile_state.items():
+            if v is not None and str(v).strip() != "":
+                profile_context_str += f"- {k}: {v}\n"
+        profile_context_str += "\n"
+
+        if ui_form_state is not None:
+            focused_field = ui_form_state.get("_focused_field", "Nenhum")
+            form_data = {k: v for k, v in ui_form_state.items() if not k.startswith("_")}
+            form_json = json.dumps(form_data, ensure_ascii=False)
+            profile_context_str += f"\nESTADO ATUAL DO FORMULÁRIO DO USUÁRIO: {form_json}\nCAMPO EM FOCO: {focused_field}\n"
+        
+        knowledge_context_str = ""
+        if agent.name in ("concluded_agent",):
+            knowledge_context_str = _load_knowledge_context()
+        
         runnable_agent = LlmAgent(
             model=agent.model,
             name=agent.name,
             description=agent.description,
-            instruction=f"USER_ID_CONTEXT: {user_id}\n" + agent.instruction + "\n" + examples,
+            instruction=f"USER_ID_CONTEXT: {user_id}\n\n" + agent.instruction + "\n\n" + profile_context_str + chat_history_for_agent + knowledge_context_str + "\n" + examples,
             tools=agent.tools,
             output_key=agent.output_key
         )
 
         runner = Runner(agent=runnable_agent, app_name="cloudinha-agent", session_service=session_service)
 
-        # 4. Run Agent & Emit/Capture Events
-        
-        # Emit "On Start" events
         async for start_event in workflow_obj.on_runner_start(agent):
              yield start_event
 
         yield {"type": "tool_start", "tool": agent.name, "args": {"workflow": workflow_obj.name}}
         
         captured_output = ""
-        
-        # Retry logic for agent execution
         max_retries = 3
         
         for attempt in range(max_retries):
             try:
                 async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=current_message):
-                    # Transform/Filter
                     final_event = workflow_obj.transform_event(event, agent.name)
                     
                     if final_event:
@@ -169,69 +643,48 @@ async def run_workflow(
                              for p in event.content.parts:
                                  if hasattr(p, 'text') and p.text: captured_output += p.text
                 
-                # If we finish the loop without error, break the retry loop
                 break
             
             except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError, ConnectionError, TimeoutError, OSError) as e:
                 print(f"[RunWorkflow] Attempt {attempt+1}/{max_retries} failed: {e}")
                 if attempt == max_retries - 1:
                     yield {"type": "error", "message": "Estou com dificuldades de conexão. Tente novamente."}
-                    # We might want to break or continue? If we break, we exit the step.
-                    # If we don't re-raise, we proceed to 'handle_step_completion' with whatever captured_output we have.
                     break
                 
-                # Backoff
                 await asyncio.sleep(2 ** attempt)
-                # Continue to next attempt (restart runner.run_async)
-                # Note: captured_output might have partial data. 
-                # Ideally we reset it? 
                 captured_output = "" 
-                # Also, we might have yielded partial events.
-
 
         yield {"type": "tool_end", "tool": agent.name, "output": "Step Completed"}
         
-        # 5. Handle Completion / Transitions
+        # Handle Completion / Transitions
         updates = workflow_obj.handle_step_completion(user_id, profile_state, captured_output)
         
         state_changed = False
         if updates:
-            updateStudentProfileTool(user_id=user_id, updates=updates)
-            profile_state.update(updates) # Local Update
+            db_updates = {k: v for k, v in updates.items() if not k.startswith("_")}
+            if db_updates:
+                updateStudentProfileTool(user_id=user_id, updates=db_updates)
+            profile_state.update(updates)
             state_changed = True
             
-            # Check for Workflow Switch/Termination/Turn End
             new_workflow = updates.get("active_workflow")
             is_turn_complete = updates.get("_is_turn_complete")
 
-            # 1. Check if workflow exited
             if "active_workflow" in updates and new_workflow is None:
                  print("[RunWorkflow] Workflow exited explicitly (None). Ending turn.")
                  break
             
-            # 2. Check if turn is marked as complete
             if is_turn_complete:
                  print("[RunWorkflow] Turn marked as complete by workflow. Ending turn.")
                  break
 
             if "active_workflow" in updates:
                  print(f"[RunWorkflow] State update triggered workflow change: {new_workflow}")
-                 # Loop will continue and pick up new workflow
-                 pass
 
         steps_run += 1
         
-        # Termination conditions to avoid infinite loops if no state change?
-        # If agent ran and no state change, usually we break (waiting for user input).
-        # EXCEPT if the agent *internally* decided to continue?
-        # Standard ADK Agent usually implies turn end unless we chain.
-        # MatchWorkflow: Reasoning -> Response chain was handled by "state change" (_match_phase).
-        # So we continue loop.
-        
-        # But if Standard Agent (Root/Sisu) ran, we should break.
         if not state_changed and not updates:
              break
 
-        # If we looped MAX times
         if steps_run >= MAX_STEPS:
             print("[RunWorkflow] Max steps reached.")
