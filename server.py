@@ -16,6 +16,7 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("cloudinha-server")
+logger.info("Starting Cloudinha Server script...")
 from typing import Optional, List, Any, Dict
 
 # Ensure src is in path
@@ -133,6 +134,11 @@ from src import __version__ as agent_version
 @app.get("/version")
 async def get_version():
     return {"version": agent_version}
+
+@app.get("/")
+async def health_check():
+    """Root endpoint for Cloud Run health checks."""
+    return {"status": "ok", "service": "cloudinha-agent", "version": agent_version}
 
 
 @app.post("/chat")
@@ -343,4 +349,5 @@ async def chat_endpoint(request: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("server:app", host="0.0.0.0", port=port)
+    logger.info(f"Initializing Uvicorn on port {port}...")
+    uvicorn.run(app, host="0.0.0.0", port=port)
