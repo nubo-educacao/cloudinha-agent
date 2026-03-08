@@ -23,7 +23,19 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
         dict: Result with status and the next phase.
     """
     choice = choice.lower().strip()
-    is_dependent = choice == "dependent"
+    # Handle natural language phrases from UI
+    is_dependent = any(word in choice for word in ["dependent", "pessoa", "outra", "filho", "parente", "irmão"])
+    is_self = any(word in choice for word in ["self", "mim", "meu", "próprio"])
+    
+    # Priority check: if it looks like dependent, it's dependent. 
+    # Otherwise, if it looks like self, it's self.
+    if is_dependent:
+        is_dependent = True
+    elif is_self:
+        is_dependent = False
+    else:
+        # Default fallback or let LLM decide? If called by Reasoning Agent, it should be clear.
+        is_dependent = "dependent" in choice # Fallback to original logic
     
     if is_dependent:
         # Check if parent already has a dependent assigned
@@ -76,6 +88,7 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
         updateStudentProfileTool(user_id=user_id, updates={
             "active_application_target_id": user_id,
             "passport_phase": "PROGRAM_MATCH",
+            "eligibility_results": None
         })
         
         return {
