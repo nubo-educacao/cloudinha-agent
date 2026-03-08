@@ -125,14 +125,14 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
     
     print(f"!!! [DEBUG TOOL] updateStudentProfileTool CALLED with user_id={user_id}, updates={updates}")
     
-    results = {
-        "profile_updated": False,
-        "preferences_updated": False,
-        "errors": []
+    # Fields that should trigger eligibility recalculation
+    ELIGIBILITY_CRITICAL_FIELDS = {
+        "age", "education", "city", "state", "education_year", "relationship"
     }
-
+    
     # Update user_profiles if applicable
     profile_updates = {}
+    should_clear_eligibility = False
     
     # Standardize city name if provided
     if "city_name" in updates:
@@ -199,6 +199,19 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
         profile_updates["relationship"] = updates["relationship"]
 
     if profile_updates:
+        # Check if any sensitive field changed to clear eligibility cache
+        for field in profile_updates:
+            if field in ELIGIBILITY_CRITICAL_FIELDS:
+                should_clear_eligibility = True
+                break
+        
+        if "onboarding_completed" in updates and updates["onboarding_completed"]:
+             should_clear_eligibility = True # Always recalc after onboarding
+
+        if should_clear_eligibility:
+            profile_updates["eligibility_results"] = None
+            print(f"!!! [ELIGIBILITY INVALIDATED] for user_id={user_id}")
+
         data = profile_updates.copy()
         data["id"] = user_id
         

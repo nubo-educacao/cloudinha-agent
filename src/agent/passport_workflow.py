@@ -11,9 +11,6 @@ from src.tools.getStudentProfile import getStudentProfileTool
 PASSPORT_INTRO_MESSAGE = "Oi! Eu sou a Cloudinha 👋\n\nEstou aqui para te ajudar a encontrar oportunidades educacionais que combinem com o seu momento e seus objetivos.\n\nVocê pode conhecer e se candidatar a programas de apoio educacional. Esses programas ajudam estudantes a desenvolver seu potencial ao longo da trajetória escolar. Eles podem oferecer aulas complementares, mentoria, orientação de estudos, desenvolvimento pessoal e, em alguns casos, apoio financeiro. Estou aqui para responder qualquer dúvida que você tiver sobre programas educacionais e sobre o processo de aplicar na plataforma.\n\nPara começar, preciso entender um pouco sobre você. Comece preenchendo o Onboarding ao lado. Com esses dados vamos te indicar em quais programas parceiros que você pode se aplicar"
 
 from src.tools.processDependentChoice import processDependentChoiceTool
-from src.tools.lookupCEP import lookupCEPTool
-from src.tools.getNextPartnerQuestion import getNextPartnerQuestionTool
-from src.tools.savePartnerAnswer import savePartnerAnswerTool
 from src.tools.smartResearch import smartResearchTool
 from src.tools.getImportantDates import getImportantDatesTool
 from src.tools.startStudentApplication import startStudentApplicationTool
@@ -63,7 +60,7 @@ ASK_DEPENDENT_REASONING_INSTRUCTION = BASE_REASONING_INSTRUCTION + """
 Você está na FASE ASK_DEPENDENT. Queremos saber se a vaga é para o usuário ou para um dependente.
 
 FUNÇÃO TÁTICA:
-1. **COORDENAR ESCOLHA**: Se o usuário disser para quem é (ex: "para mim" ou "para minha filha"), use OBRIGATORIAMENTE `processDependentChoiceTool(choice='self'|'dependent')`.
+1. **COORDENAR ESCOLHA**: Se o usuário disser para quem é (ex: "para mim", "É para mim", "Para outra pessoa" ou "para minha filha"), use OBRIGATORIAMENTE `processDependentChoiceTool(choice='self'|'dependent')`.
 2. **IDADE**: Use `getStudentProfileTool` para ver a idade. Use isso para sugerir as opções de forma contextual.
 """
 
