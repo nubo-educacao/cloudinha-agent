@@ -7,12 +7,14 @@ def startStudentApplicationTool(user_id: str, partner_id: str) -> str:
     """
     Inicia uma nova aplicação para um programa parceiro e pré-preenche os dados com base no mapping_source definido no formulário.
     É usada quando o usuário escolhe um programa parceiro para se aplicar.
+    Só permite iniciar 1 aplicação por parceiro a cada 6 meses.
     
     Args:
         user_id: string. O ID do usuário (geralmente passado por USER_ID_CONTEXT).
         partner_id: string. O ID do parceiro (UUID) ou o NOME do parceiro para o qual será feita a inscrição.
     """
     import uuid
+    from datetime import datetime, timedelta
     
     # 0. Resolve partner ID if a name was provided
     resolved_partner_id = partner_id
@@ -25,7 +27,31 @@ def startStudentApplicationTool(user_id: str, partner_id: str) -> str:
             return f"Nenhum parceiro encontrado com o nome fornecido: {partner_id}."
         resolved_partner_id = name_res.data[0]["id"]
 
-    # 1. Fetch partner form mapping source
+    # 1. Check for existing application within 6 months
+    six_months_ago = (datetime.now() - timedelta(days=180)).isoformat()
+    existing_app_res = supabase_client.table("student_applications") \
+        .select("id, status, created_at") \
+        .eq("user_id", user_id) \
+        .eq("partner_id", resolved_partner_id) \
+        .gte("created_at", six_months_ago) \
+        .order("created_at", desc=True) \
+        .limit(1) \
+        .execute()
+
+    if existing_app_res.data:
+        existing_app = existing_app_res.data[0]
+        status = existing_app.get("status")
+        
+        if status == "SUBMITTED":
+            # Direct to CONCLUSION
+            supabase_client.table("user_profiles").update({"passport_phase": "CONCLUDED"}).eq("id", user_id).execute()
+            return "Você já enviou uma candidatura para este programa nos últimos 6 meses. Como ela já foi enviada, estou te levando para a tela de conclusão para você ver o resultado."
+        else:
+            # Direct to EVALUATE (Draft)
+            supabase_client.table("user_profiles").update({"passport_phase": "EVALUATE"}).eq("id", user_id).execute()
+            return "Você já tem uma candidatura em andamento para este programa. Estou te levando de volta para o formulário para você continuar de onde parou."
+
+    # 2. Fetch partner form mapping source
     form_res = supabase_client.table("partner_forms").select("mapping_source").eq("partner_id", resolved_partner_id).execute()
     if not form_res.data:
         return f"Nenhum formulário ou mapeamento encontrado para o partner_id {resolved_partner_id}."
