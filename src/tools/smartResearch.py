@@ -2,7 +2,7 @@ from src.tools.knowledgeSearch import knowledgeSearchTool
 from src.tools.duckDuckGoSearch import duckDuckGoSearchTool
 from src.tools.readRulesTool import readRulesTool
 from src.tools.readPartnerDocTool import readPartnerDocTool
-from src.agent.config import MODEL_CHAT
+# from src.agent.config import MODEL_CHAT # Circular dependency fix
 from src.lib.error_handler import safe_execution
 import os
 import asyncio
@@ -20,7 +20,7 @@ PARTNER_GENERAL_KNOWLEDGE_PATH = os.path.join(
 )
 
 # Initialize client for verification (currently unused, kept for future use)
-VERIFICATION_MODEL = MODEL_CHAT 
+# VERIFICATION_MODEL = MODEL_CHAT # Currently unused
 
 @safe_execution(error_type="tool_error", default_return="Erro na pesquisa inteligente.")
 async def smartResearchTool(query: str, program: str = None, partner_name: str = None, collection_name: str = "documents") -> str:
@@ -109,7 +109,7 @@ async def smartResearchTool(query: str, program: str = None, partner_name: str =
 
     # 5. RAG (Em Standby - Desativado)
     # 6. Fallback para Web
-    return await perform_web_fallback(query, "Full Context não aplicável ou RAG em standby.")
+    return await perform_web_fallback(query, "Full Context não aplicável ou RAG em standby.", program=program)
 
 
 def _detect_target_program(query_lower: str) -> str:
@@ -185,13 +185,23 @@ def _read_file_content(file_path: str) -> str:
     return None
 
 
-async def perform_web_fallback(query: str, reason: str) -> str:
+async def perform_web_fallback(query: str, reason: str, program: str = None) -> str:
     print(f"[SmartResearch] Iniciando busca Web. Motivo: {reason}")
     
-    web_result = duckDuckGoSearchTool(query)
+    # Se o programa for educational programs, use partners.link como referência no DDG
+    site = None
+    if program == "programs":
+        site = "partners.link"
+        print(f"[SmartResearch] Usando site='{site}' como referência.")
+    
+    web_result = duckDuckGoSearchTool(query, site=site)
     
     if web_result and "Desculpe, não consegui" in web_result:
          pass
 
     print(f"[SmartResearch] Web Search concluído.")
-    return f"FONTE: PESQUISA NA WEB ({reason})\n\n{web_result}"
+    source_label = f"PESQUISA NA WEB ({reason})"
+    if site:
+        source_label += f" - REF: {site}"
+        
+    return f"FONTE: {source_label}\n\n{web_result}"
