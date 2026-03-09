@@ -24,14 +24,19 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
     """
     choice = choice.lower().strip()
     # Handle natural language phrases from UI
-    is_dependent = any(word in choice for word in ["dependent", "pessoa", "outra", "filho", "parente", "irmão"])
-    is_self = any(word in choice for word in ["self", "mim", "meu", "próprio"])
+    is_dependent_kw = any(word in choice for word in [
+        "dependent", "pessoa", "outra", "filho", "filha", "parente", 
+        "irmão", "irmã", "neto", "neta", "sobrinho", "sobrinha"
+    ])
+    is_self_kw = any(word in choice for word in [
+        "self", "mim", "meu", "minha", "próprio", "própria", "eu mesmo", "eu mesma"
+    ])
     
     # Priority check: if it looks like dependent, it's dependent. 
     # Otherwise, if it looks like self, it's self.
-    if is_dependent:
+    if is_dependent_kw:
         is_dependent = True
-    elif is_self:
+    elif is_self_kw:
         is_dependent = False
     else:
         # Default fallback or let LLM decide? If called by Reasoning Agent, it should be clear.
