@@ -61,12 +61,13 @@ def startStudentApplicationTool(user_id: str, partner_id: str) -> str:
         else:
             return "Você já tem uma candidatura em andamento para este programa. Estou te levando de volta para o formulário para você continuar de onde parou."
 
-    # 4. Fetch partner form mapping source
-    form_res = supabase_client.table("partner_forms").select("mapping_source").eq("partner_id", resolved_partner_id).execute()
+    # 4. Fetch partner form mapping source and field names
+    form_res = supabase_client.table("partner_forms").select("field_name, mapping_source").eq("partner_id", resolved_partner_id).execute()
     if not form_res.data:
         return f"Nenhum formulário ou mapeamento encontrado para o partner_id {resolved_partner_id}."
         
-    mapping_source_list = [f.get("mapping_source") for f in form_res.data if f.get("mapping_source")]
+    mapping_data = [{"field_name": f.get("field_name"), "mapping_source": f.get("mapping_source")} 
+                  for f in form_res.data if f.get("mapping_source")]
     
     # 5. Fetch User Profile & Preferences for data pre-fill
     profile_res = supabase_client.table("user_profiles").select("*").eq("id", student_id).execute()
@@ -77,15 +78,22 @@ def startStudentApplicationTool(user_id: str, partner_id: str) -> str:
     
     # 6. Build Dynamic Answers (Pre-fill)
     answers = {}
-    for mapping in mapping_source_list:
-        if not mapping: continue
+    for item in mapping_data:
+        mapping = item["mapping_source"]
+        field_name_key = item["field_name"]
+        if not mapping or not field_name_key: continue
+        
         parts = mapping.split(".")
         if len(parts) == 2:
             source_table, field_name = parts
+            value = None
             if source_table == "user_profiles" and field_name in profile_data:
-                answers[mapping] = profile_data[field_name]
+                value = profile_data[field_name]
             elif source_table == "user_preferences" and field_name in pref_data:
-                answers[mapping] = pref_data[field_name]
+                value = pref_data[field_name]
+            
+            if value is not None and value != "":
+                answers[field_name_key] = value
     
     # 7. Insert into student_applications
     payload = {
