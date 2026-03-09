@@ -125,6 +125,8 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
     
     print(f"!!! [DEBUG TOOL] updateStudentProfileTool CALLED with user_id={user_id}, updates={updates}")
     
+    results = {}
+    
     # Fields that should trigger eligibility recalculation
     ELIGIBILITY_CRITICAL_FIELDS = {
         "age", "education", "city", "state", "education_year", "relationship"
@@ -145,7 +147,21 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
             profile_updates["city"] = raw_city  # Keep original if not found
             print(f"!!! [CITY NOT FOUND] Keeping original: '{raw_city}'")
     
-    if "age" in updates:
+    if "birth_date" in updates:
+        birth_date = updates["birth_date"]
+        profile_updates["birth_date"] = birth_date
+        # Auto-calculate age if birth_date is provided
+        try:
+            from datetime import date
+            birth = date.fromisoformat(birth_date)
+            today = date.today()
+            age = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+            profile_updates["age"] = age
+            print(f"!!! [AGE CALCULATED] birth_date={birth_date} -> age={age}")
+        except Exception as e:
+            print(f"[WARN] Failed to calculate age from birth_date '{birth_date}': {e}")
+
+    if "age" in updates and "birth_date" not in updates:
         profile_updates["age"] = updates["age"]
     if "full_name" in updates:
         raw_name = updates["full_name"].strip()

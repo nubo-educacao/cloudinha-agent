@@ -241,6 +241,8 @@ class PassportWorkflow(BaseWorkflow):
 
     def get_agent_for_user(self, user_id: str, current_state: Dict[str, Any]) -> Optional[Agent]:
         passport_phase = current_state.get("passport_phase") or "INTRO"
+        print(f"[TRACE] [PassportWorkflow] DECISION POINT: user_id={user_id}, phase_received='{passport_phase}'")
+        print(f"[PassportWorkflow] get_agent_for_user: phase='{passport_phase}' for user={user_id}")
         
         # Phase 1: Greeting
         if passport_phase == "INTRO":
@@ -293,11 +295,11 @@ class PassportWorkflow(BaseWorkflow):
         upd = {}
         
         if passport_phase == "INTRO":
-            if not current_state.get("onboarding_completed"):
-                upd["passport_phase"] = "ONBOARDING"
-            else:
-                upd["passport_phase"] = "ASK_DEPENDENT"
+            # [FIX] Do NOT auto-transition to ONBOARDING after intro.
+            # We wait for the user to click "Vamos começar!" which sends a specific message.
+            # This ensures the user SEES the scripted greeting.
             upd["_is_turn_complete"] = True
+            return upd
             
         elif passport_phase == "ONBOARDING":
             fresh_state = getStudentProfileTool(user_id)

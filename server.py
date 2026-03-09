@@ -66,6 +66,7 @@ class ChatRequest(BaseModel):
     userId: Optional[str] = None
     sessionId: Optional[str] = None
     ui_form_state: Optional[Dict[str, Any]] = None
+    passport_phase: Optional[str] = None
 
 # --- Retry Logic Configuration ---
 RETRY_CONFIG = {
@@ -94,13 +95,14 @@ async def safe_get_or_create_session(app_name: str, session_id: str, user_id: st
     )
 
 @retry(**RETRY_CONFIG)
-async def safe_run_workflow(user_id: str, session_id: str, new_message: Content, ui_form_state: Optional[Dict[str, Any]] = None) -> str:
+async def safe_run_workflow(user_id: str, session_id: str, new_message: Content, ui_form_state: Optional[Dict[str, Any]] = None, passport_phase: Optional[str] = None) -> str:
     response_text = ""
     async for event in run_workflow(
         user_id=user_id,
         session_id=session_id,
         new_message=new_message,
-        ui_form_state=ui_form_state
+        ui_form_state=ui_form_state,
+        passport_phase=passport_phase
     ):
         # Inspecting event structure
         logger.info(f"[DEBUG SERVER] Received event type: {type(event)}")
@@ -187,7 +189,7 @@ async def chat_endpoint(request: ChatRequest):
 
 
             try:
-                async for event in run_workflow(user_id, session_id, new_message, request.ui_form_state):
+                async for event in run_workflow(user_id, session_id, new_message, request.ui_form_state, request.passport_phase):
                     # Debug Log
                     # logger.info(f"[RAW EVENT]: {event}")
                     # Force print to terminal for debugging visibility
