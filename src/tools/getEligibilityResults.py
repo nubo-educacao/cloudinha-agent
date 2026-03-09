@@ -14,9 +14,9 @@ def getEligibilityResultsTool(user_id: str) -> str:
     """
     import json
 
-    # Fetch eligibility_results from user_profiles
+    # Fetch eligibility_results and active target from user_profiles
     res = supabase.table("user_profiles") \
-        .select("eligibility_results") \
+        .select("eligibility_results, active_application_target_id") \
         .eq("id", user_id) \
         .execute()
 
@@ -24,14 +24,20 @@ def getEligibilityResultsTool(user_id: str) -> str:
         return json.dumps({"error": "Perfil não encontrado.", "results": []})
 
     eligibility = res.data[0].get("eligibility_results")
+    active_target = res.data[0].get("active_application_target_id")
+    
+    # Determine who the target is
+    target_type = "dependente" if active_target and active_target != user_id else "estudante"
 
     if not eligibility or (isinstance(eligibility, list) and len(eligibility) == 0):
         return json.dumps({
-            "message": "Os resultados de elegibilidade ainda não foram calculados pelo frontend. Os cards dos parceiros estão na tela do usuário. Pergunte ao estudante qual programa ele deseja e use o nome do parceiro para iniciar a aplicação.",
+            "message": f"Os resultados de elegibilidade para o {target_type} ainda não foram calculados pelo frontend. Os cards dos parceiros estão na tela do usuário. Pergunte ao estudante qual programa ele deseja e use o nome do parceiro para iniciar a aplicação.",
+            "target": target_type,
             "results": []
         })
 
     return json.dumps({
-        "message": f"Encontrados {len(eligibility)} parceiros avaliados.",
+        "message": f"Encontrados {len(eligibility)} parceiros avaliados para o {target_type}.",
+        "target": target_type,
         "results": eligibility
     })

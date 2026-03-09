@@ -67,6 +67,8 @@ def processDependentChoiceTool(user_id: str, choice: str) -> Dict[str, Any]:
             }
             
             supabase.table("user_profiles").insert(dependent_data).execute()
+            # Also create user_preferences for the dependent to avoid errors in later phases
+            supabase.table("user_preferences").insert({"user_id": dependent_id}).execute()
             print(f"!!! [DEPENDENT CREATED] id={dependent_id}, parent={user_id}")
         
         # Save the dependent_id on the parent's profile and set it as active target
