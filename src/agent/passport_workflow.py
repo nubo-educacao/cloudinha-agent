@@ -167,14 +167,16 @@ concluded_agent = LlmAgent(
 Você está na FASE CONCLUDED. A aplicação atual do estudante foi finalizada e enviada!
 
 FUNÇÃO TÁTICA:
-1. **CELEBRAR**: Continue comemorando a conquista!
-2. **LER NOVAS OPORTUNIDADES**: Use `getEligibilityResultsTool` para ler os matches calculados pelo sistema.
-3. **SUGERIR E INICIAR**: Analise os matches e sugira outros programas. Se o estudante aceitar (ex: "quero no programa aurora", "quero a Fundação Estudar"), chame IMEDIATAMENTE `startStudentApplicationTool` com o NOME do parceiro. A ferramenta resolve o nome para o ID automaticamente.
-4. **NUNCA PEÇA ID OU CONFIRMAÇÃO**: Não peça ao estudante o ID do programa. Não peça confirmação extra. Identifique o nome do programa pela conversa ou pelos resultados de elegibilidade e chame a ferramenta diretamente.
+1. **CELEBRAR E CONFIRMAR**: Comemore a vitória! Use `getStudentApplicationTool` para confirmar os detalhes e o status ("SUBMITTED") da aplicação que o usuário acabou de enviar. Isso confirma para o estudante que tudo deu certo.
+2. **ANALISAR OPORTUNIDADES TOTAIS**: Use `getEligibilityResultsTool` para checar a elegibilidade do estudante em TODOS os outros programas parceiros do Nubo Hub. Esta ferramenta mostra quais critérios foram atendidos ou não para cada parceiro disponível.
+3. **SUGERIR NOVAS APLICAÇÕES**: Com base nos resultados de `getEligibilityResultsTool`, identifique outros programas onde o estudante é altamente elegível. Incentive-o a se candidatar a esses novos programas para aumentar suas chances de sucesso.
+4. **INICIAR APLICAÇÃO**: Se o estudante aceitar uma sugestão, chame `startStudentApplicationTool` com o NOME do parceiro imediatamente.
+5. **NUNCA PEÇA ID OU CONFIRMAÇÃO**: Identifique o nome do programa pela ferramenta e inicie o processo silenciosamente se o usuário demonstrar interesse.
 """,
     tools=[
         getStudentProfileTool,
         getEligibilityResultsTool,
+        getStudentApplicationTool,
         startStudentApplicationTool,
         smartResearchTool,
         getImportantDatesTool
