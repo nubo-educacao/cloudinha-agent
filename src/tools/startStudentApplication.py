@@ -49,6 +49,9 @@ def startStudentApplicationTool(user_id: str, partner_id: str) -> str:
         existing_app = existing_app_res.data[0]
         status = existing_app.get("status")
         
+        # Bump updated_at so the frontend picks this application as the most recent
+        supabase_client.table("student_applications").update({"updated_at": datetime.now().isoformat()}).eq("id", existing_app["id"]).execute()
+        
         # Advance passport_phase to correct state anyway
         next_phase = "CONCLUDED" if status == "SUBMITTED" else "EVALUATE"
         supabase_client.table("user_profiles").update({"passport_phase": next_phase}).eq("id", user_id).execute()
