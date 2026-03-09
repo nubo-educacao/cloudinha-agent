@@ -60,7 +60,9 @@ ASK_DEPENDENT_REASONING_INSTRUCTION = BASE_REASONING_INSTRUCTION + """
 Você está na FASE ASK_DEPENDENT. Queremos saber se a vaga é para o usuário ou para um dependente.
 
 FUNÇÃO TÁTICA:
-1. **COORDENAR ESCOLHA**: Se o usuário disser para quem é (ex: "para mim", "É para mim", "Para outra pessoa" ou "para minha filha"), use OBRIGATORIAMENTE `processDependentChoiceTool(choice='self'|'dependent')`.
+1. **COORDENAR ESCOLHA**: SEMPRE que o usuário responder indicando para quem é a aplicação (ex: "É para mim", "Para mim", "Preencher pra mim", "É para outra pessoa", "Para outra pessoa", "É para minha filha", "Para meu filho", etc.), use OBRIGATORIAMENTE a ferramenta `processDependentChoiceTool`.
+   - Você pode passar 'self' (se for para o próprio usuário) ou 'dependent' (se for para outra pessoa).
+   - Opcionalmente, você pode passar a própria resposta do usuário no parâmetro `choice` (ex: choice="É para minha filha"), pois a ferramenta entenderá a intenção.
 2. **IDADE**: Use `getStudentProfileTool` para ver a idade. Use isso para sugerir as opções de forma contextual.
 """
 
