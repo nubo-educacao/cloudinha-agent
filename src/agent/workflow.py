@@ -292,7 +292,8 @@ async def run_workflow(
     user_id: str,
     session_id: str,
     new_message: Content,
-    ui_form_state: Optional[Dict[str, Any]] = None
+    ui_form_state: Optional[Dict[str, Any]] = None,
+    passport_phase: Optional[str] = None
 ) -> AsyncGenerator[Any, None]:
     """
     Orchestrates the generic agent workflow.
@@ -309,6 +310,13 @@ async def run_workflow(
 
     # 0. Fetch Initial State
     profile_state = getStudentProfileTool(user_id)
+    db_phase_initial = profile_state.get("passport_phase")
+    print(f"[TRACE] [RunWorkflow] 1. Initial State from DB: passport_phase='{db_phase_initial}'")
+    
+    if passport_phase:
+        print(f"[TRACE] [RunWorkflow] 2. Frontend Input detected: '{passport_phase}' (Waiting for final override)")
+    else:
+        print(f"[TRACE] [RunWorkflow] 2. No Frontend override provided.")
     
     msg_text = new_message.parts[0].text if new_message.parts else ""
     
@@ -356,13 +364,25 @@ async def run_workflow(
 
     # Force passport_workflow
     if active_wf != "passport_workflow":
-        print(f"[RunWorkflow] Forcing workflow -> 'passport_workflow'")
+        print(f"[TRACE] [RunWorkflow] 4. FORCING workflow -> 'passport_workflow'")
         updateStudentProfileTool(user_id=user_id, updates={"active_workflow": "passport_workflow"})
         profile_state = getStudentProfileTool(user_id)
         active_wf = "passport_workflow"
+        print(f"[TRACE] [RunWorkflow] 5. RE-FETCHED state after forcing: passport_phase='{profile_state.get('passport_phase')}'")
     
     profile_state["active_workflow"] = "passport_workflow"
-
+    
+    # --- FINAL PHASE OVERRIDE (Source of Truth) ---
+    # We apply this here (at the very end) to ensure no DB re-fetch or side-effect
+    # wipes out the phase intent sent by the frontend.
+    db_phase_final = profile_state.get("passport_phase")
+    if passport_phase:
+        print(f"[TRACE] [RunWorkflow] 6. APPLYING OVERRIDE: DB='{db_phase_final}' -> Frontend='{passport_phase}'")
+        profile_state["passport_phase"] = passport_phase
+    else:
+        print(f"[TRACE] [RunWorkflow] 6. Final State (No override): passport_phase='{db_phase_final}'")
+    # ---------------------------------------------
+    
     # Main Loop
     MAX_STEPS = 10
     steps_run = 0
@@ -409,6 +429,7 @@ async def run_workflow(
             scripted_name = step.get("name", "scripted_step")
             print(f"[RunWorkflow] Scripted step: {scripted_name} (Workflow: {workflow_obj.name})")
             
+            print(f"[RunWorkflow] Yielding scripted message: '{scripted_message[:50]}...'")
             yield SimpleTextEvent(scripted_message)
             captured_output = scripted_message
             

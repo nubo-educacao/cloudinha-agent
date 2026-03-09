@@ -22,7 +22,7 @@ def check_profile_complete(state: Dict[str, Any]) -> bool:
     Retorna True apenas se TODOS os 6 campos essenciais estiverem preenchidos.
     """
     has_name = bool(state.get("full_name"))
-    has_age = state.get("age") is not None
+    has_birth_date = bool(state.get("birth_date"))
     # getStudentProfileTool returns city as 'registered_city_name'
     has_city = bool(state.get("registered_city_name"))
     has_education = bool(state.get("education"))
@@ -30,10 +30,10 @@ def check_profile_complete(state: Dict[str, Any]) -> bool:
     has_street_num = bool(state.get("street_number"))
 
     # Debug logs
-    if not (has_name and has_age and has_city and has_education and has_zip and has_street_num):
-        print(f"[ONBOARDING CHECK] Incomplete: Name={has_name}, Age={has_age}, City={has_city}, Educ={has_education}, Zip={has_zip}, Num={has_street_num}")
+    if not (has_name and has_birth_date and has_city and has_education and has_zip and has_street_num):
+        print(f"[ONBOARDING CHECK] Incomplete: Name={has_name}, BirthDate={has_birth_date}, City={has_city}, Educ={has_education}, Zip={has_zip}, Num={has_street_num}")
         
-    return has_name and has_age and has_city and has_education and has_zip and has_street_num
+    return has_name and has_birth_date and has_city and has_education and has_zip and has_street_num
 
 class OnboardingWorkflow(BaseWorkflow):
     @property
