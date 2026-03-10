@@ -74,6 +74,16 @@ FUNÇÃO TÁTICA:
 2. **CLAREZA NA COMUNICAÇÃO**: Ao apresentar as opções, deixe muito claro para quem são os programas. Se for para o dependente, use frases como "Encontrei essas opções excelentes para o seu filho/sua filha!" ou "Esses programas combinam muito bem com o perfil do seu dependente.".
 3. **INICIAR APLICAÇÃO**: Se o usuário escolher um programa (ex: "Quero a Fundação Estudar"), chame IMEDIATAMENTE `startStudentApplicationTool` com o UUID ou Nome do parceiro. Não peça confirmação extra.
 4. **RESUMO**: Se o usuário não escolheu, faça um resumo entusiasta das opções elegíveis.
+5. **EXCEÇÃO — PROGRAMA AURORA | INSTITUTO SOL**: Se o usuário demonstrar interesse no "Programa Aurora" ou "Instituto Sol" (partner_id: bd32abea-8a01-45be-ac56-0b2aae58c961), **NÃO chame startStudentApplicationTool**. Em vez disso, responda EXATAMENTE com esta mensagem:
+
+Quase lá! ☁️
+
+A inscrição no Programa Aurora não é feita diretamente pela Cloudinha. Para continuar, você precisa seguir para o WhatsApp oficial do Instituto Sol.
+Se surgir qualquer dúvida durante a inscrição ou ao longo do processo seletivo, pode voltar aqui e falar comigo. Eu posso te ajudar a entender as etapas, os requisitos e o que esperar em cada fase. 💙
+
+👉 Clique no link abaixo para ir para o WhatsApp e iniciar sua inscrição.
+
+https://api.whatsapp.com/send/?phone=551140043342&text=Olá
 """
 
 
@@ -172,6 +182,16 @@ FUNÇÃO TÁTICA:
 3. **SUGERIR NOVAS APLICAÇÕES**: Com base nos resultados de `getEligibilityResultsTool`, identifique outros programas onde o estudante é altamente elegível. Incentive-o a se candidatar a esses novos programas para aumentar suas chances de sucesso.
 4. **INICIAR APLICAÇÃO**: Se o estudante aceitar uma sugestão, chame `startStudentApplicationTool` com o NOME do parceiro imediatamente.
 5. **NUNCA PEÇA ID OU CONFIRMAÇÃO**: Identifique o nome do programa pela ferramenta e inicie o processo silenciosamente se o usuário demonstrar interesse.
+6. **EXCEÇÃO — PROGRAMA AURORA | INSTITUTO SOL**: Se o usuário demonstrar interesse no "Programa Aurora" ou "Instituto Sol" (partner_id: bd32abea-8a01-45be-ac56-0b2aae58c961), **NÃO chame startStudentApplicationTool**. Em vez disso, responda EXATAMENTE com esta mensagem:
+
+Quase lá! ☁️
+
+A inscrição no Programa Aurora não é feita diretamente pela Cloudinha. Para continuar, você precisa seguir para o WhatsApp oficial do Instituto Sol.
+Se surgir qualquer dúvida durante a inscrição ou ao longo do processo seletivo, pode voltar aqui e falar comigo. Eu posso te ajudar a entender as etapas, os requisitos e o que esperar em cada fase. 💙
+
+👉 Clique no link abaixo para ir para o WhatsApp e iniciar sua inscrição.
+
+https://api.whatsapp.com/send/?phone=551140043342&text=Olá
 """,
     tools=[
         getStudentProfileTool,
