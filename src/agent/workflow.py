@@ -458,7 +458,7 @@ async def run_workflow(
             default_context = _build_default_context(user_id, profile_state, chat_history_for_agent, ui_form_state)
             knowledge_context = _load_knowledge_context()
             
-            yield {"type": "tool_start", "tool": "reasoning_agent", "args": {"workflow": workflow_obj.name}}
+            yield {"type": "tool_start", "tool": r_agent.name, "args": {"workflow": workflow_obj.name}}
             
             # === STEP 1: Reasoning Agent ===
             print(f"[RunWorkflow] 🧠 Running Reasoning Agent...")
@@ -488,7 +488,7 @@ async def run_workflow(
                     _log_tool_error(
                         user_id=user_id,
                         session_id=session_id,
-                        tool_name="reasoning_agent",
+                        tool_name=r_agent.name,
                         error_msg=str(e),
                         tb=traceback.format_exc(),
                         error_type="reasoning_agent_error"
@@ -496,7 +496,7 @@ async def run_workflow(
                     
                     if attempt == max_retries - 1:
                         yield {"type": "error", "message": "Estou com dificuldades de conexão ou limite de uso excedido. Tente novamente em alguns minutos."}
-                        yield {"type": "tool_end", "tool": "reasoning_agent", "output": "Failed", "success": False}
+                        yield {"type": "tool_end", "tool": r_agent.name, "output": "Failed", "success": False}
                         return
                     await asyncio.sleep(2 ** attempt)
             
@@ -506,7 +506,7 @@ async def run_workflow(
             print(f"[RunWorkflow] 🧠 Reasoning complete. Report length: {len(reasoning_raw)} chars")
             print(f"[RunWorkflow] 🧠 Report preview: {reasoning_raw[:300]}...")
             
-            yield {"type": "tool_end", "tool": "reasoning_agent", "output": "Reasoning Complete"}
+            yield {"type": "tool_end", "tool": r_agent.name, "output": "Reasoning Complete"}
             
             # === STEP 2: Response Agent ===
             print(f"[RunWorkflow] 💬 Running Response Agent...")
