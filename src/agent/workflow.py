@@ -370,6 +370,12 @@ async def run_workflow(
         active_wf = "passport_workflow"
         print(f"[TRACE] [RunWorkflow] 5. RE-FETCHED state after forcing: passport_phase='{profile_state.get('passport_phase')}'")
     
+    # Ensure passport_phase is explicitly initialized in the DB for existing users
+    if not profile_state.get("passport_phase"):
+        print(f"[TRACE] [RunWorkflow] Initializing empty passport_phase to 'INTRO' in the database.")
+        updateStudentProfileTool(user_id=user_id, updates={"passport_phase": "INTRO"})
+        profile_state["passport_phase"] = "INTRO"
+
     profile_state["active_workflow"] = "passport_workflow"
     
     # --- FINAL PHASE OVERRIDE (Source of Truth) ---
