@@ -317,7 +317,7 @@ class PassportWorkflow(BaseWorkflow):
         return
 
     def handle_step_completion(self, user_id: str, current_state: Dict[str, Any], step_output: str) -> Optional[Dict[str, Any]]:
-        passport_phase = current_state.get("passport_phase", "INTRO")
+        passport_phase = current_state.get("passport_phase") or "INTRO"
         
         upd = {}
         
