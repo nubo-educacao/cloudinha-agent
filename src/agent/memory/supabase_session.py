@@ -197,7 +197,7 @@ class SupabaseSessionService(BaseSessionService):
     def set_client(self, client: Any):
         self.client = client
 
-    async def create_session(self, app_name: str, session_id: str, user_id: Optional[str] = None) -> Session:
+    async def create_session(self, app_name: str, session_id: str, user_id: Optional[str] = None, **kwargs) -> Session:
         if not user_id:
              user_id = session_id 
         
@@ -211,11 +211,11 @@ class SupabaseSessionService(BaseSessionService):
         self._sessions[session_id] = session
         return session
 
-    async def get_session(self, app_name: str, session_id: str, user_id: Optional[str] = None) -> Session:
+    async def get_session(self, app_name: str, session_id: str, user_id: Optional[str] = None, **kwargs) -> Session:
         if session_id in self._sessions:
              return self._sessions[session_id]
         
-        return await self.create_session(app_name, session_id, user_id)
+        return await self.create_session(app_name, session_id, user_id, **kwargs)
 
     async def list_sessions(self, app_name: str) -> List[Session]:
         return list(self._sessions.values())
