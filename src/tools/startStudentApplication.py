@@ -3,7 +3,7 @@ import json
 from src.agent.agent import supabase_client
 
 @safe_execution(error_type="start_student_application_error", default_return="Erro ao iniciar aplicação.")
-def startStudentApplicationTool(user_id: str, partner_id: str) -> str:
+def startStudentApplicationTool(user_id: str, partner_id: str, target_user_id: str = None) -> str:
     """
     Inicia uma nova aplicação para um programa parceiro e pré-preenche os dados com base no mapping_source definido no formulário.
     É usada quando o usuário escolhe um programa parceiro para se aplicar.
@@ -12,6 +12,7 @@ def startStudentApplicationTool(user_id: str, partner_id: str) -> str:
     Args:
         user_id: string. O ID do usuário (geralmente passado por USER_ID_CONTEXT).
         partner_id: string. O ID do parceiro (UUID) ou o NOME do parceiro para o qual será feita a inscrição.
+        target_user_id: string opcional. O ID do usuário real da aplicação, passado pelo frontend. Se omitido, cai no fallback.
     """
     import uuid
     from datetime import datetime, timedelta
@@ -28,11 +29,16 @@ def startStudentApplicationTool(user_id: str, partner_id: str) -> str:
         resolved_partner_id = name_res.data[0]["id"]
 
     # 2. Determine who is applying (self or dependent)
-    # Fetch parent profile to check what the active target is
-    parent_res = supabase_client.table("user_profiles").select("active_application_target_id").eq("id", user_id).execute()
     student_id = user_id
-    if parent_res.data and parent_res.data[0].get("active_application_target_id"):
-        student_id = parent_res.data[0]["active_application_target_id"]
+    if target_user_id:
+        student_id = target_user_id
+        print(f"!!! [START APP] Using explicit target_user_id: {student_id}")
+    else:
+        # Fallback: Fetch parent profile to check what the active target is
+        parent_res = supabase_client.table("user_profiles").select("active_application_target_id").eq("id", user_id).execute()
+        if parent_res.data and parent_res.data[0].get("active_application_target_id"):
+            student_id = parent_res.data[0]["active_application_target_id"]
+            print(f"!!! [START APP] Using fallback active_application_target_id: {student_id}")
 
     # 3. Check for existing application within 6 months FOR THE STUDENT
     six_months_ago = (datetime.now() - timedelta(days=180)).isoformat()
