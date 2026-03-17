@@ -193,6 +193,8 @@ def updateStudentProfileTool(user_id: str, updates: Dict[str, Any]) -> str:
         profile_updates["passport_phase"] = updates["passport_phase"]
     if "current_dependent_id" in updates:
         profile_updates["current_dependent_id"] = updates["current_dependent_id"]
+    if "active_application_target_id" in updates:
+        profile_updates["active_application_target_id"] = updates["active_application_target_id"]
     if "zip_code" in updates:
         profile_updates["zip_code"] = updates["zip_code"]
     if "street" in updates:
