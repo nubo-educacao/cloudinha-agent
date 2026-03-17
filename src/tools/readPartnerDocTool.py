@@ -1,68 +1,69 @@
-import os
-from pypdf import PdfReader
+from src.lib.supabase import supabase
 from src.lib.error_handler import safe_execution
 
-# Map of lowercase keyword → PDF filename
-# Multiple keys can point to the same file for fuzzy matching
-PARTNER_PDF_MAP = {
-    "fundação estudar": "Fundação Estudar.pdf",
-    "fundacao estudar": "Fundação Estudar.pdf",
-    "estudar": "Fundação Estudar.pdf",
-    "instituto ponte": "Instituto Ponte.pdf",
-    "ponte": "Instituto Ponte.pdf",
-    "programa aurora": "Programa Aurora Instituto Sol.pdf",
-    "instituto sol": "Programa Aurora Instituto Sol.pdf",
-    "aurora": "Programa Aurora Instituto Sol.pdf",
-    "sol": "Programa Aurora Instituto Sol.pdf",
-}
-
-PARTNERS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "documents", "partners")
 
 @safe_execution(error_type="tool_error", default_return="Erro ao ler documento do parceiro.")
 def readPartnerDocTool(partner_name: str) -> str:
     """
-    Reads the full text content of a partner's PDF document.
+    Reads the full text content of a partner's knowledge document from Supabase Storage.
+
+    Searches the knowledge_documents table for documents linked to the partner,
+    then downloads the .md file from the 'knowledge-base' Storage bucket.
 
     Args:
-        partner_name (str): The name of the partner program (e.g. 'Fundação Estudar', 'Instituto Ponte', 'Programa Aurora').
+        partner_name (str): The name of the partner program
+            (e.g. 'Fundação Estudar', 'Instituto Ponte', 'Programa Aurora').
 
     Returns:
-        str: The full text extracted from the partner's PDF document.
+        str: The full text content of the partner's document.
     """
     if not partner_name:
         return "Erro: O argumento 'partner_name' é obrigatório."
 
     name_lower = partner_name.lower().strip()
 
-    # Try exact match first, then substring match
-    pdf_filename = PARTNER_PDF_MAP.get(name_lower)
+    # 1. Find partner by name
+    partner_result = (
+        supabase.from_("partners")
+        .select("id, name")
+        .ilike("name", f"%{name_lower}%")
+        .limit(1)
+        .execute()
+    )
 
-    if not pdf_filename:
-        # Fuzzy: check if any key is contained in the input or vice-versa
-        for key, filename in PARTNER_PDF_MAP.items():
-            if key in name_lower or name_lower in key:
-                pdf_filename = filename
-                break
+    if not partner_result.data:
+        return f"Parceiro '{partner_name}' não encontrado na base de dados."
 
-    if not pdf_filename:
-        available = ", ".join(sorted(set(PARTNER_PDF_MAP.values())))
-        return f"Parceiro '{partner_name}' não encontrado. Parceiros disponíveis: {available}"
+    partner_id = partner_result.data[0]["id"]
+    partner_display_name = partner_result.data[0]["name"]
 
-    file_path = os.path.join(PARTNERS_DIR, pdf_filename)
+    # 2. Search knowledge documents linked to this partner
+    result = supabase.rpc("search_knowledge_by_keyword", {
+        "p_keyword": None,
+        "p_partner_id": partner_id,
+        "p_category_name": None,
+    }).execute()
 
-    if not os.path.exists(file_path):
-        return f"Erro: Arquivo '{pdf_filename}' não encontrado em {PARTNERS_DIR}."
+    if not result.data:
+        return f"Nenhum documento encontrado para o parceiro '{partner_display_name}' na base de conhecimento."
 
-    print(f"[ReadPartnerDoc] Lendo PDF: {pdf_filename}")
+    # 3. Download and combine all partner documents
+    full_content = ""
+    for doc in result.data:
+        storage_path = doc.get("storage_path", "")
+        if not storage_path:
+            continue
 
-    reader = PdfReader(file_path)
-    full_text = ""
-    for page in reader.pages:
-        text = page.extract_text()
-        if text:
-            full_text += text + "\n"
+        try:
+            response = supabase.storage.from_("knowledge-base").download(storage_path)
+            if response:
+                content = response.decode("utf-8")
+                title = doc.get("title", "Documento")
+                full_content += f"\n\n{'='*40}\nCONTEÚDO DO DOCUMENTO: {title}\n{'='*40}\n\n{content}"
+        except Exception as e:
+            print(f"[ReadPartnerDoc] Erro ao baixar {storage_path}: {e}")
 
-    if not full_text.strip():
-        return f"Aviso: O PDF '{pdf_filename}' não contém texto extraível."
+    if not full_content.strip():
+        return f"Aviso: Os documentos do parceiro '{partner_display_name}' não contêm texto."
 
-    return f"CONTEÚDO DO DOCUMENTO: {pdf_filename}\n{'=' * 40}\n\n{full_text}"
+    return full_content

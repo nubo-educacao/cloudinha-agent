@@ -64,24 +64,27 @@ workflow_registry = {
 # Wrapper for Root (Fallback only)
 root_workflow = SingleAgentWorkflow(root_agent, "root_workflow")
 
-# --- Knowledge Base Paths (injected into reasoning/concluded agents) ---
-import os
-_DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "documents")
-_PASSPORT_DOC_PATH = os.path.join(_DOCS_DIR, "passei_workflow_doc.md")
-_GENERAL_KNOWLEDGE_PATH = os.path.join(_DOCS_DIR, "partners", "Base de conhecimento geral.md")
+# --- Knowledge Base Context (fetched from Supabase Storage) ---
 
-# Cache to avoid re-reading files on every turn
+# Cache to avoid re-fetching from Supabase on every turn within the same process
 _knowledge_cache = {}
+_CACHE_TTL_SECONDS = 300  # Re-fetch every 5 minutes
 
 def _load_knowledge_context() -> str:
-    """Pre-loads knowledge base content and returns formatted context string."""
-    if "content" in _knowledge_cache:
-        return _knowledge_cache["content"]
-    
-    print(f"[Workflow] Loading knowledge base files...")
-    
+    """Loads knowledge base content from Supabase Storage (category 'general') and returns formatted context string."""
+    import time
+
+    cached = _knowledge_cache.get("content")
+    cached_at = _knowledge_cache.get("cached_at", 0)
+
+    if cached and (time.time() - cached_at) < _CACHE_TTL_SECONDS:
+        return cached
+
+    print("[Workflow] Loading knowledge base from Supabase...")
+
     sections = []
-    
+
+    # 1. Process summary (inline, always available as fallback)
     process_summary = """=== COMO FUNCIONA O PASSAPORTE DA ELIGIBILIDADE ===
 
 O Passaporte da Eligibilidade é um processo guiado pela Cloudinha que ajuda estudantes a encontrar e se candidatar a programas educacionais parceiros. Funciona assim:
@@ -110,25 +113,42 @@ O QUE SÃO PROGRAMAS DE APOIO EDUCACIONAL:
 São iniciativas de organizações da sociedade civil que ampliam oportunidades de formação acadêmica. NÃO se limitam a bolsas financeiras — podem incluir aulas complementares, mentoria, orientação de carreira, desenvolvimento socioemocional, preparação para processos seletivos e mais.
 """
     sections.append(process_summary)
-    print("[Workflow] ✅ Process summary loaded")
-    
-    if os.path.exists(_GENERAL_KNOWLEDGE_PATH):
-        try:
-            with open(_GENERAL_KNOWLEDGE_PATH, "r", encoding="utf-8") as f:
-                content = f.read()
-            if content.strip():
-                sections.append(f"=== BASE DE CONHECIMENTO DETALHADA SOBRE PROGRAMAS EDUCACIONAIS ===\n{content}")
-                print(f"[Workflow] ✅ Loaded Base de conhecimento geral.md ({len(content)} chars)")
-        except Exception as e:
-            print(f"[Workflow] ❌ Erro ao ler {_GENERAL_KNOWLEDGE_PATH}: {e}")
-    else:
-        print(f"[Workflow] ❌ Base de conhecimento geral.md NOT FOUND at {_GENERAL_KNOWLEDGE_PATH}")
-    
-    result = "\nBASE DE CONHECIMENTO — USE ESTAS INFORMAÇÕES PARA RESPONDER PERGUNTAS DO ESTUDANTE:\n" + "\n\n".join(sections) + "\n--- FIM DA BASE DE CONHECIMENTO ---\n"
-    print(f"[Workflow] ✅ Knowledge context ready ({len(result)} chars total)")
-    
-    _knowledge_cache["content"] = result
-    return result
+    print("[Workflow] ✅ Process summary loaded (inline)")
+
+    # 2. Fetch documents from Supabase (category 'general')
+    try:
+        result = supabase.rpc("search_knowledge_by_keyword", {
+            "p_keyword": None,
+            "p_partner_id": None,
+            "p_category_name": "general",
+        }).execute()
+
+        if result.data:
+            for doc in result.data:
+                storage_path = doc.get("storage_path", "")
+                title = doc.get("title", "Documento")
+                if not storage_path:
+                    continue
+                try:
+                    response = supabase.storage.from_("knowledge-base").download(storage_path)
+                    if response:
+                        content = response.decode("utf-8")
+                        if content.strip():
+                            sections.append(f"=== {title.upper()} ===\n{content}")
+                            print(f"[Workflow] ✅ Loaded from Supabase: {title} ({len(content)} chars)")
+                except Exception as e:
+                    print(f"[Workflow] ❌ Erro ao baixar {storage_path}: {e}")
+        else:
+            print("[Workflow] ℹ️ Nenhum documento 'general' encontrado no Supabase.")
+    except Exception as e:
+        print(f"[Workflow] ❌ Erro ao buscar documentos do Supabase: {e}")
+
+    result_text = "\nBASE DE CONHECIMENTO — USE ESTAS INFORMAÇÕES PARA RESPONDER PERGUNTAS DO ESTUDANTE:\n" + "\n\n".join(sections) + "\n--- FIM DA BASE DE CONHECIMENTO ---\n"
+    print(f"[Workflow] ✅ Knowledge context ready ({len(result_text)} chars total)")
+
+    _knowledge_cache["content"] = result_text
+    _knowledge_cache["cached_at"] = time.time()
+    return result_text
 
 class SimpleTextEvent:
     def __init__(self, text: str):

@@ -6,7 +6,6 @@ from src.tools.updateStudentProfile import updateStudentProfileTool
 from src.tools.updateStudentPreferences import updateStudentPreferencesTool
 from src.tools.logModeration import logModerationTool
 from src.tools.getImportantDates import getImportantDatesTool
-from src.tools.readRulesTool import readRulesTool
 from src.tools.smartResearch import smartResearchTool
 from src.tools.duckDuckGoSearch import duckDuckGoSearchTool
 from .utils import load_instruction_from_file
@@ -51,7 +50,7 @@ root_agent = LlmAgent(
     instruction=load_instruction_from_file("root_agent_instruction.txt") + "\n\n" + load_instruction_from_file("persona.txt"),
     # sub_agents=[prouni_agent, sisu_agent], # Match agent removed from direct sub-agents
     sub_agents=[prouni_agent, sisu_agent],
-    tools=[logModerationTool, getStudentProfileTool, updateStudentProfileTool, readRulesTool]
+    tools=[logModerationTool, getStudentProfileTool, updateStudentProfileTool, smartResearchTool]
 )
 
 # --- Root Agent for the Runner ---
