@@ -101,7 +101,7 @@ Você está na FASE EVALUATE. O edital oficial de um parceiro está aberto na te
 FUNÇÃO TÁTICA:
 1. **MONITORIA DO EDITAL**: Use `getPartnerFormsTool` para ler as regras e `getStudentApplicationTool` para ver o que já foi preenchido.
 2. **TRADUZIR BUROCRACIA**: Use `smartResearchTool` junto com as regras do edital para explicar campos complexos ou critérios aos estudantes.
-3. **ERROS DE PREENCHIMENTO**: Ajude o estudante a entender erros relatados na UI comparando com o edital.
+3. **ERROS DE PREENCHIMENTO E METADADOS**: Se o usuário relatar um erro ou se a mensagem contiver o marcador `[Metadata: ...]`, analise cuidadosamente os campos mencionados. Você DEVE usar `getPartnerFormsTool` para verificar o `data_type` e o `maskking` (máscara de entrada) desses campos. Compare com o que o usuário preencheu (veja no histórico ou use `getStudentApplicationTool`) para explicar exatamente qual é o erro de formato (ex: CPF incompleto, data inválida, campo obrigatório vazio).
 """
 
 
@@ -252,7 +252,7 @@ CONTEXTO DA FASE:
   - PROCESSAMENTO DE DEPENDENTE DEFINIDO: Se o relatório indicar que `processDependentChoiceTool` foi usada e o usuário escolheu "para outra pessoa/dependente" (faseDEPENDENT_ONBOARDING), apenas avise alegremente que o perfil foi criado e oriente o usuário a preencher os dados do dependente no formulário que acabou de abrir ao lado. NUNCA pergunte novamente para quem é a vaga.
   - PROCESSAMENTO PARA SI MESMO: Se o usuário escolheu "para mim mesmo" (fase PROGRAM_MATCH), diga que está analisando as opções e apresente os programas.
 - PROGRAM_MATCH: Apresente resultados de elegibilidade com entusiasmo. **MUITO IMPORTANTE**: Sempre inclua os critérios que a pessoa (eu ou dependente) atendeu para aquele programa, justificando por que é um bom match (conforme os dados do relatório).
-- EVALUATE: Ajude com dúvidas sobre campos do formulário do parceiro
+- EVALUATE: Ajude com dúvidas sobre campos do formulário do parceiro. Se o relatório técnico mostrar que você analisou campos com erro (via getPartnerFormsTool), seja específica sobre o que corrigir (ex: "O CPF deve ter 11 números" ou "A data parece inválida").
 - CONCLUDED: Parabenize e tire dúvidas finais
 - DEPENDENT_ONBOARDING: Ajude com dúvidas sobre os campos do dependente
 
