@@ -96,12 +96,25 @@ https://api.whatsapp.com/send/?phone=551140043342&text=Olá
 
 
 EVALUATE_REASONING_INSTRUCTION = BASE_REASONING_INSTRUCTION + """
-Você está na FASE EVALUATE. O edital oficial de um parceiro está aberto na tela para preenchimento.
+Você está no MÓDULO DE RACIOCÍNIO da FASE EVALUATE (Preenchimento de formulário de parceiro).
+Sua função é fornecer um RELATÓRIO TÉCNICO estruturado para o agente de resposta.
 
-FUNÇÃO TÁTICA:
-1. **MONITORIA DO EDITAL**: Use `getPartnerFormsTool` para ler as regras e `getStudentApplicationTool` para ver o que já foi preenchido.
-2. **TRADUZIR BUROCRACIA**: Use `smartResearchTool` junto com as regras do edital para explicar campos complexos ou critérios aos estudantes.
-3. **ERROS DE PREENCHIMENTO E METADADOS**: Se o usuário relatar um erro ou se a mensagem contiver o marcador `[Metadata: ...]`, analise cuidadosamente os campos mencionados. Você DEVE usar `getPartnerFormsTool` para verificar o `data_type` e o `maskking` (máscara de entrada) desses campos. Compare com o que o usuário preencheu (veja no histórico ou use `getStudentApplicationTool`) para explicar exatamente qual é o erro de formato (ex: CPF incompleto, data inválida, campo obrigatório vazio).
+PROTOCOLO DE PENSAMENTO OBRIGATÓRIO (NÃO PULE ESTAS ETAPAS):
+1. **TOOL CALL WITH USER_ID**: Você DEVE chamar `getPartnerFormsTool(user_id="...")` passando o `user_id` do contexto. Se o usuário estiver perguntando sobre o formulário na tela, omita o `partner_id`.
+2. **FILTRAGEM DE ETAPA (CONDIÇÃO CRÍTICA)**: A ferramenta retorna TODOS os campos do formulário. Você deve identificar em qual etapa (`step_name`) o usuário afirma estar (ex: "Dados acadêmicos") e FILTRAR os resultados para processar APENAS os campos dessa etapa. Se não houver etapa mencionada, use a etapa com o primeiro erro detectado.
+3. **RELATÓRIO ESTRUTURADO**: Ignore o tom de voz. Emita APENAS os dados filtrados:
+
+--- INÍCIO DO RELATÓRIO TÉCNICO ---
+ETAPA DETECTADA: [Nome da etapa filtrada]
+REJEIÇÃO DE DADOS IRRELEVANTES: [Cite brevemente que descartou X campos de outras etapas para focar nesta]
+CAMPOS DA ETAPA: [Lista de question_text e data_type dos campos filtrados]
+ERROS E VALIDAÇÕES: [Analise o 'maskking' e o erro apenas dos campos desta etapa]
+DICA TÉCNICA: [Instrução clara para o response_agent sobre como ajudar o usuário nesta etapa específica]
+--- FIM DO RELATÓRIO TÉCNICO ---
+
+REGRAS DE CHAMADA DE FERRAMENTA:
+- Sempre use o `user_id` do contexto (USER_ID_CONTEXT).
+- Jamais emita texto conversacional. Seu output é um documento técnico para a Cloudinha (agente de resposta).
 """
 
 
@@ -330,10 +343,15 @@ class PassportWorkflow(BaseWorkflow):
 
     def handle_step_completion(self, user_id: str, current_state: Dict[str, Any], step_output: str) -> Optional[Dict[str, Any]]:
         passport_phase = current_state.get("passport_phase") or "INTRO"
+        # Debug: Log reasoning report (safe for Pyre)
+        print(f"[REASONING REPORT] user_id={user_id}, phase={passport_phase}")
+        if step_output:
+             print(f"[REASONING REPORT CONTENT]: {step_output[:200]}...")
         
         upd = {}
         
         if passport_phase == "INTRO":
+            print(f"[REASONING OUTPUT] Phase INTRO: {step_output}")
             # [FIX] Do NOT auto-transition to ONBOARDING after intro.
             # We wait for the user to click "Vamos começar!" which sends a specific message.
             # This ensures the user SEES the scripted greeting.
