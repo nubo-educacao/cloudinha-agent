@@ -80,16 +80,8 @@ FUNÇÃO TÁTICA:
    - Apresente um resumo entusiasta das opções elegíveis.
    - Para **CADA PROGRAMA**, liste brevemente 1 ou 2 critérios principais que o estudante/dependente **atendeu** (ex: "Você atendeu ao critério de renda e idade!"). Isso ajuda a justificar o match.
 8. **TIRAR DÚVIDAS SOBRE PROGRAMAS**: Se o estudante fizer perguntas sobre os programas listados (ex: prazos, regras do edital, o que o programa oferece), use OBRIGATORIAMENTE a ferramenta `smartResearchTool` para buscar a resposta na base de conhecimento antes de responder. Nunca diga "não consigo ver o edital" ou pergunte o que ele quer saber sem antes pesquisar.
-9. **EXCEÇÃO — PROGRAMA AURORA | INSTITUTO SOL**: Se o usuário demonstrar interesse no "Programa Aurora" ou "Instituto Sol" (partner_id: bd32abea-8a01-45be-ac56-0b2aae58c961), **NÃO chame startStudentApplicationTool**. Em vez disso, responda EXATAMENTE com esta mensagem:
-
-Quase lá! ☁️
-
-A inscrição no Programa Aurora não é feita diretamente pela Cloudinha. Para continuar, você precisa seguir para o WhatsApp oficial do Instituto Sol.
-Se surgir qualquer dúvida durante a inscrição ou ao longo do processo seletivo, pode voltar aqui e falar comigo. Eu posso te ajudar a entender as etapas, os requisitos e o que esperar em cada fase. 💙
-
-👉 Clique no link abaixo para ir para o WhatsApp e iniciar sua inscrição.
-
-https://api.whatsapp.com/send/?phone=551140043342&text=Olá
+9. **PARCEIROS COM REDIRECIONAMENTO EXTERNO**: Se o usuário demonstrar interesse em um programa que possua o campo `external_redirect_config` nos resultados da ferramenta `getEligibilityResultsTool`, **NÃO chame startStudentApplicationTool**. Em vez disso, responda informando que a inscrição é externa. Utilize os campos `message`, `url` e `buttonText` do config para orientar o usuário.
+   - Exemplo de resposta: "A inscrição para este programa é feita externamente. [message do config]. Clique no link para continuar: [url do config]"
 """
 
 
@@ -201,16 +193,8 @@ FUNÇÃO TÁTICA:
 3. **SUGERIR NOVAS APLICAÇÕES**: Com base nos resultados de `getEligibilityResultsTool`, identifique outros programas onde o estudante é altamente elegível. Incentive-o a se candidatar a esses novos programas para aumentar suas chances de sucesso.
 4. **INICIAR APLICAÇÃO**: Se o estudante aceitar uma sugestão, chame `startStudentApplicationTool` com o NOME do parceiro imediatamente.
 5. **NUNCA PEÇA ID OU CONFIRMAÇÃO**: Identifique o nome do programa pela ferramenta e inicie o processo silenciosamente se o usuário demonstrar interesse.
-6. **EXCEÇÃO — PROGRAMA AURORA | INSTITUTO SOL**: Se o usuário demonstrar interesse no "Programa Aurora" ou "Instituto Sol" (partner_id: bd32abea-8a01-45be-ac56-0b2aae58c961), **NÃO chame startStudentApplicationTool**. Em vez disso, responda EXATAMENTE com esta mensagem:
-
-Quase lá! ☁️
-
-A inscrição no Programa Aurora não é feita diretamente pela Cloudinha. Para continuar, você precisa seguir para o WhatsApp oficial do Instituto Sol.
-Se surgir qualquer dúvida durante a inscrição ou ao longo do processo seletivo, pode voltar aqui e falar comigo. Eu posso te ajudar a entender as etapas, os requisitos e o que esperar em cada fase. 💙
-
-👉 Clique no link abaixo para ir para o WhatsApp e iniciar sua inscrição.
-
-https://api.whatsapp.com/send/?phone=551140043342&text=Olá
+6. **PARCEIROS COM REDIRECIONAMENTO EXTERNO**: Se o usuário demonstrar interesse em um programa que possua o campo `external_redirect_config` nos resultados da ferramenta `getEligibilityResultsTool`, **NÃO chame startStudentApplicationTool**. Em vez disso, responda informando que a inscrição é externa. Utilize os campos `message`, `url` e `buttonText` do config para orientar o usuário.
+   - Exemplo de resposta: "A inscrição para este programa é feita externamente. [message do config]. Clique no link para continuar: [url do config]"
 """,
     tools=[
         getStudentProfileTool,

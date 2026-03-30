@@ -36,6 +36,21 @@ def getEligibilityResultsTool(user_id: str) -> str:
             "results": []
         })
 
+    # Fetch external_redirect_config for the partners found in eligibility
+    partner_ids = [item.get("partner_id") for item in eligibility if item.get("partner_id")]
+    if partner_ids:
+        partners_res = supabase.table("partners") \
+            .select("id, external_redirect_config") \
+            .in_("id", partner_ids) \
+            .execute()
+        
+        if partners_res.data:
+            redirect_map = {p["id"]: p.get("external_redirect_config") for p in partners_res.data}
+            for item in eligibility:
+                pid = item.get("partner_id")
+                if pid in redirect_map:
+                    item["external_redirect_config"] = redirect_map[pid]
+
     return json.dumps({
         "message": f"Encontrados {len(eligibility)} parceiros avaliados para o {target_type}.",
         "target": target_type,
