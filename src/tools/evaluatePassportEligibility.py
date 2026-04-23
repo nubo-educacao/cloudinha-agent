@@ -23,15 +23,32 @@ def evaluate_json_logic(rule: Any, data: Dict[str, Any]) -> Any:
     
     def compare(a, b, op_str):
         if a is None or b is None: return False
+        
+        # Try numeric comparison first
         try:
-            if isinstance(a, str) and isinstance(b, (int, float)): a = float(a)
-            if isinstance(b, str) and isinstance(a, (int, float)): b = float(b)
-        except ValueError:
-            pass
-        if op_str == ">": return a > b
-        if op_str == ">=": return a >= b
-        if op_str == "<": return a < b
-        if op_str == "<=": return a <= b
+            def clean_num(val):
+                if isinstance(val, str):
+                    v = val.replace("R$", "").replace(" ", "").strip()
+                    if "," in v and "." in v: v = v.replace(".", "").replace(",", ".")
+                    elif "," in v: v = v.replace(",", ".")
+                    return float(v)
+                return float(val)
+
+            a_num = clean_num(a)
+            b_num = clean_num(b)
+            
+            if op_str == ">": return a_num > b_num
+            if op_str == ">=": return a_num >= b_num
+            if op_str == "<": return a_num < b_num
+            if op_str == "<=": return a_num <= b_num
+        except (ValueError, TypeError):
+            try:
+                if op_str == ">": return str(a) > str(b)
+                if op_str == ">=": return str(a) >= str(b)
+                if op_str == "<": return str(a) < str(b)
+                if op_str == "<=": return str(a) <= str(b)
+            except:
+                return False
         return False
         
     if op in ("==", "==="):
@@ -88,13 +105,21 @@ def evaluatePassportEligibilityTool(user_id: str) -> Dict[str, Any]:
     profile = profile_res.data[0]
     
     # 2. Fetch all criteria forms with partner names
-    # First get partners to have names
-    partners_res = supabase_client.table("partners").select("id, name").execute()
+    # First get partners to have names and open status
+    partners_res = supabase_client.table("partners").select("id, name, applications_open").execute()
+    open_partner_ids = [p["id"] for p in partners_res.data if p.get("applications_open") is True]
     partners_map = {p["id"]: p["name"] for p in partners_res.data}
     
+    if not open_partner_ids:
+        supabase_client.table("user_profiles").update({
+            "eligibility_results": []
+        }).eq("id", user_id).execute()
+        return {"status": "success", "results": [], "message": "No open partners found."}
+
     criteria_res = supabase_client.table("partner_forms") \
         .select("partner_id, field_name, mapping_source, criterion_rule") \
         .eq("is_criterion", True) \
+        .in_("partner_id", open_partner_ids) \
         .execute()
     
     if not criteria_res.data:
