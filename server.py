@@ -25,7 +25,7 @@ sys.path.append(os.path.join(os.getcwd(), 'src'))
 # OpenTelemetry Imports
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, ConsoleSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
@@ -33,7 +33,7 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 trace.set_tracer_provider(TracerProvider())
 tracer = trace.get_tracer(__name__)
 trace.get_tracer_provider().add_span_processor(
-    BatchSpanProcessor(ConsoleSpanExporter())
+    SimpleSpanProcessor(ConsoleSpanExporter())
 )
 
 from src.agent.middleware import check_rate_limit
