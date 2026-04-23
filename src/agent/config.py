@@ -4,12 +4,12 @@
 # === MODELOS DE CHAT ===
 
 # Modelo principal para agentes conversacionais (Ilimitado no Tier atual)
-# gemini-2.0-flash: Rápido, inteligente e seguro para escala
-MODEL_CHAT = "gemini-2.0-flash"
+# gemini-2.5-flash: Modelo de nova geração
+MODEL_CHAT = "gemini-2.5-flash"
 
 # Modelo leve para classificação/roteamento (Ilimitado no Tier atual)
-# gemini-2.0-flash-lite: Versão mais recente e leve da família 2.0
-MODEL_ROUTER = "gemini-2.0-flash-lite"
+# gemini-2.5-flash-lite: Versão leve da nova geração
+MODEL_ROUTER = "gemini-2.5-flash-lite"
 
 # Modelos para tarefas que exigem maior inteligência (Tools/Reasoning)
 # Recomendação: Manter no 2.0 Flash (Ilimitado) para evitar gargalos com 1100 usuários.
