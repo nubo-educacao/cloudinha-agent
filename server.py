@@ -331,10 +331,13 @@ async def chat_endpoint(request: ChatRequest):
             
             # Persist error to agent_errors for learning
             try:
+                # Sanitize session_id for UUID database field (remove 'session-' prefix if present)
+                db_session_id = session_id.replace("session-", "") if session_id else session_id
+                
                 from src.agent.agent import supabase_client
                 supabase_client.table('agent_errors').insert({
                     'user_id': user_id,
-                    'session_id': session_id,
+                    'session_id': db_session_id,
                     'error_type': 'server_stream_error',
                     'error_message': str(e),
                     'stack_trace': tb,
