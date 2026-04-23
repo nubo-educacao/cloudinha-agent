@@ -27,6 +27,9 @@ steps:
     - 'southamerica-east1'
     - '--platform'
     - 'managed'
+    - '--allow-unauthenticated'
+    - '--set-env-vars'
+    - 'GOOGLE_API_KEY=$_GOOGLE_API_KEY,SUPABASE_URL=$_SUPABASE_URL,SUPABASE_KEY=$_SUPABASE_KEY,SUPABASE_SERVICE_KEY=$_SUPABASE_SERVICE_KEY,DB_CONNECTION_STRING=$_DB_CONNECTION_STRING,TIMEZONE=$_TIMEZONE'
 
 images:
   - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA'
@@ -34,3 +37,5 @@ images:
 
 options:
   logging: CLOUD_LOGGING_ONLY
+
+
