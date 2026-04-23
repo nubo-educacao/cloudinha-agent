@@ -28,6 +28,15 @@ def startStudentApplicationTool(user_id: str, partner_id: str, target_user_id: s
             return f"Nenhum parceiro encontrado com o nome fornecido: {partner_id}."
         resolved_partner_id = name_res.data[0]["id"]
 
+    # 1.5. Check for external redirect before doing anything else
+    partner_res = supabase_client.table("partners").select("external_redirect_config").eq("id", resolved_partner_id).execute()
+    if partner_res.data and partner_res.data[0].get("external_redirect_config"):
+        config = partner_res.data[0]["external_redirect_config"]
+        url = config.get("url", "")
+        msg = config.get("message", "A inscrição é feita em um site externo.")
+        return f"ATENÇÃO: A inscrição para este parceiro é externa. A fase do usuário NÃO foi alterada e NENHUM formulário interno foi aberto. Repasse o link ao usuário. Diga a ele: {msg}. Link de inscrição: {url}"
+
+
     # 2. Determine who is applying (self or dependent)
     student_id = user_id
     if target_user_id:
