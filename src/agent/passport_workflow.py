@@ -31,9 +31,10 @@ DIRETRIZES PARA TODOS OS AGENTES (SEMPRE ATIVAS):
 2. **SILÊNCIO TÉCNICO**: Nunca diga "vou pesquisar", "vou verificar na ferramenta" ou "usando minhas ferramentas". Execute a tool silenciosamente e responda com o resultado.
 3. **USO DA smartResearchTool — REGRAS DE program**:
    - Genérica sobre programas ou Nubo → program="programs"
-   - Específica sobre um parceiro → program="programs", partner_name="Nome do Parceiro"
+   - Específica sobre um parceiro → program="programs", partner_name="Nome base do Parceiro (ex: Insper, Behring)"
    - Sobre Prouni/Sisu → program="prouni" ou "sisu"
    - Sobre a Cloudinha/Assistente → program="cloudinha"
+4. **MANUTENÇÃO DE CONTEXTO (IMPORTANTE)**: Se o usuário fizer uma pergunta de continuação (ex: "e a bolsa parcial?"), você DEVE obrigatoriamente repassar o `partner_name` da interação anterior para a `smartResearchTool`. Nunca perca o contexto do parceiro atual!
 """
 
 # ============================================================
