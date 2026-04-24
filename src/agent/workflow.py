@@ -325,7 +325,7 @@ async def run_workflow(
     chat_history_for_agent = ""
     active_wf = profile_state.get("active_workflow")
     try:
-        session = await session_service.get_session("cloudinha-agent", session_id, user_id)
+        session = await session_service.get_session("cloudinha-server", session_id, user_id)
         
         if active_wf and hasattr(session, 'load_for_workflow'):
             workflow_history = session.load_for_workflow(active_wf, limit=20)
